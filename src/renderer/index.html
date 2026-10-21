@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>Agent Office</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <header id="topbar">
+      <span class="brand">Agent Office</span>
+      <span id="server-status"></span>
+      <span id="agent-count"></span>
+    </header>
+    <main>
+      <div id="stage"><canvas id="office"></canvas></div>
+      <aside id="panel" hidden></aside>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

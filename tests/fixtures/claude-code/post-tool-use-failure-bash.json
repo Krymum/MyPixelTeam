@@ -1,0 +1,16 @@
+{
+  "_fixture": "Built from the Claude Code hooks reference, not captured live.",
+  "session_id": "94a1df67-c170-4377-b3d3-e6caabc86449",
+  "transcript_path": "C:\\Users\\dev\\.claude\\projects\\D--work-shop\\94a1df67-c170-4377-b3d3-e6caabc86449.jsonl",
+  "cwd": "D:\\work\\shop",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "npm test",
+    "description": "Run tests"
+  },
+  "tool_use_id": "toolu_01XYZ",
+  "error": "Exit code 1\n3 tests failed",
+  "duration_ms": 2310
+}

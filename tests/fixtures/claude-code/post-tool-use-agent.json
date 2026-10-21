@@ -1,0 +1,23 @@
+{
+  "session_id": "94a1df67-c170-4377-b3d3-e6caabc86449",
+  "transcript_path": "C:\\Users\\dev\\.claude\\projects\\D--work-shop\\94a1df67-c170-4377-b3d3-e6caabc86449.jsonl",
+  "cwd": "D:\\work\\shop",
+  "scratchpad_dir": "C:\\Users\\dev\\AppData\\Local\\Temp\\claude\\D--work-shop\\94a1df67-c170-4377-b3d3-e6caabc86449\\scratchpad",
+  "prompt_id": "e5c88cf2-87bb-4d5d-a47e-44d0c7110f52",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Read test.txt content",
+    "prompt": "Read test.txt and report its content.",
+    "subagent_type": "Explore"
+  },
+  "tool_response": {
+    "note": "trimmed for the fixture"
+  },
+  "tool_use_id": "toolu_01NP3H6GL7KaRzp2BaVwGhit",
+  "duration_ms": 7
+}

@@ -1,0 +1,22 @@
+{
+  "session_id": "94a1df67-c170-4377-b3d3-e6caabc86449",
+  "transcript_path": "C:\\Users\\dev\\.claude\\projects\\D--work-shop\\94a1df67-c170-4377-b3d3-e6caabc86449.jsonl",
+  "cwd": "D:\\work\\shop",
+  "scratchpad_dir": "C:\\Users\\dev\\AppData\\Local\\Temp\\claude\\D--work-shop\\94a1df67-c170-4377-b3d3-e6caabc86449\\scratchpad",
+  "prompt_id": "cf874d44-1a15-4d98-bff5-5d63763da23e",
+  "permission_mode": "auto",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "WebSearch",
+  "tool_input": {
+    "query": "vitest fake timers",
+    "mode": "standard"
+  },
+  "tool_response": {
+    "note": "trimmed for the fixture"
+  },
+  "tool_use_id": "toolu_01NWZXiXCghk3ihNefh7tGfL",
+  "duration_ms": 4833
+}

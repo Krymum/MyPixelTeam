@@ -1,0 +1,12 @@
+{
+  "defaultRole": "dev",
+  "rules": [
+    { "match": { "agentName": ".*(review|test|qa|lint|verif).*" }, "role": "qa" },
+    {
+      "match": { "agentName": "explore|plan|.*(research|doc|search|guide).*" },
+      "role": "research"
+    },
+    { "match": { "agentName": ".*(deploy|devops|infra|ops|release).*" }, "role": "ops" },
+    { "match": { "cwd": ".*[\\\\/](infra|ops|deploy|terraform|k8s)([\\\\/].*)?" }, "role": "ops" }
+  ]
+}
