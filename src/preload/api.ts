@@ -11,6 +11,8 @@ export interface ServerInfo {
   listening: boolean;
   error?: string;
   demo: boolean;
+  /** Folder of Claude Code transcripts being followed, when that is on. */
+  transcripts?: string;
   configPath?: string;
   /** Why office.config.json was ignored, if it was. */
   configError?: string;

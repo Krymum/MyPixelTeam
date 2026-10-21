@@ -1,5 +1,6 @@
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { IPC, type ServerInfo } from "../preload/api";
 import { createRoleResolver, DEFAULT_CONFIG } from "../shared/config/office-config";
@@ -8,14 +9,30 @@ import { normalizers } from "../shared/normalize";
 import type { OfficeEvent } from "../shared/protocol/schema";
 import { loadConfig, watchConfig, type LoadedConfig } from "./config";
 import { createIngestServer, listen } from "./server";
+import { defaultTranscriptRoot, TranscriptWatcher } from "./transcripts";
 
 const PORT = Number(process.env.AGENT_OFFICE_PORT ?? 4777);
 const TOKEN = process.env.AGENT_OFFICE_TOKEN || undefined;
 const DEMO = process.argv.includes("--demo") || process.env.AGENT_OFFICE_DEMO === "1";
+const TRANSCRIPTS = process.env.AGENT_OFFICE_TRANSCRIPTS !== "0";
 const HISTORY_LIMIT = 2000;
+/** Claude Code sessions that report through hooks; their transcripts would duplicate them. */
+const hookedSessions = new Set<string>();
 
 const history: OfficeEvent[] = [];
-const CONFIG_PATH = process.env.AGENT_OFFICE_CONFIG ?? join(app.getAppPath(), "office.config.json");
+const BUNDLED_CONFIG = join(app.getAppPath(), "office.config.json");
+const CONFIG_PATH = process.env.AGENT_OFFICE_CONFIG ?? defaultConfigPath();
+
+/** In the packaged .exe the bundled file is read-only: edit a copy in the user data folder. */
+function defaultConfigPath(): string {
+  if (!app.isPackaged) return BUNDLED_CONFIG;
+  const path = join(app.getPath("userData"), "office.config.json");
+  if (!existsSync(path) && existsSync(BUNDLED_CONFIG)) {
+    mkdirSync(dirname(path), { recursive: true });
+    copyFileSync(BUNDLED_CONFIG, path);
+  }
+  return path;
+}
 
 const info: ServerInfo = { url: `http://127.0.0.1:${PORT}`, listening: false, demo: DEMO };
 let win: BrowserWindow | null = null;
@@ -77,8 +94,29 @@ function startDemo(): void {
   setInterval(() => scenario.step(Date.now()).forEach(publish), 200);
 }
 
+/** Shows every Claude Code session on the machine, hooks or not. */
+function startTranscripts(): void {
+  const root = defaultTranscriptRoot(app.getPath("home"));
+  const watcher = new TranscriptWatcher({
+    root,
+    onEvent: (event) => {
+      if (!hookedSessions.has(event.sessionId)) publish(event);
+    },
+  });
+  watcher.start();
+  info.transcripts = root;
+  console.log(`[agent-office] following Claude Code transcripts in ${root}`);
+}
+
 async function startServer(): Promise<void> {
-  const server = createIngestServer({ token: TOKEN, normalizers, onEvent: publish });
+  const server = createIngestServer({
+    token: TOKEN,
+    normalizers,
+    onEvent: (event) => {
+      if (event.source === "claude-code") hookedSessions.add(event.sessionId);
+      publish(event);
+    },
+  });
   try {
     await listen(server, PORT);
     info.listening = true;
@@ -89,12 +127,21 @@ async function startServer(): Promise<void> {
   }
 }
 
+// A second launch would fail to bind the port: focus the running window instead.
+if (!app.requestSingleInstanceLock()) app.quit();
+app.on("second-instance", () => {
+  if (win?.isMinimized()) win.restore();
+  win?.focus();
+});
+
 app.whenReady().then(async () => {
   ipcMain.handle(IPC.history, () => history);
   ipcMain.handle(IPC.info, () => info);
   useConfig(loadConfig(CONFIG_PATH));
   watchConfig(CONFIG_PATH, useConfig);
   await startServer();
+  // Before the window, so its first status read and history already include them.
+  if (!DEMO && TRANSCRIPTS) startTranscripts();
   createWindow();
   if (DEMO) startDemo();
   // Dev aid: AGENT_OFFICE_SCREENSHOT=out.png saves a capture of the window after

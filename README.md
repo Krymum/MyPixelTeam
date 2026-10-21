@@ -7,12 +7,14 @@ little 16-bit character. It walks in through the front door, sits at a desk in i
 room, types while it uses tools, thinks, waits for you, goes for coffee when idle, and leaves
 when the session ends. Subagents spawn next to their parent and head to their own room.
 
-Agent Office only **observes**: it never calls a model API and never drives your agents. Your
-CLIs report what they do through their own hook systems to a small local HTTP server inside
-the app.
+Agent Office only **observes**: it never calls a model API and never drives your agents.
+Claude Code sessions are picked up from the transcripts Claude Code already writes, with no
+setup. CLIs can also report what they do through their own hook systems to a small local
+HTTP server inside the app.
 
 ```
- Claude Code ──hook──▶ adapters/claude-code.mjs ──POST──▶ 127.0.0.1:4777 ──▶ the office
+ Claude Code ──writes──▶ ~/.claude/projects/**/*.jsonl ──read──────────────▶ the office
+ Claude Code ──hook──▶ adapters/claude-code.mjs ──POST──▶ 127.0.0.1:4777 ──▶ (optional)
  your script ──────────────── curl ───────────────POST──▶ /events
 ```
 
@@ -42,7 +44,30 @@ npm run dev
 
 The top bar shows `● listening on http://127.0.0.1:4777` when the server is up.
 
+### Windows executable
+
+```bash
+npm run dist       # builds dist/MyPixelTeam.exe, a single portable file
+```
+
+Copy the `.exe` anywhere and double-click it; launching it twice focuses the open window.
+It is unsigned, so SmartScreen may ask for confirmation the first time. If you installed
+the hooks, they point at `adapters/` in this repo, so keep the repo where it is. In the `.exe`, the role
+rules live in `%APPDATA%\agent-office\office.config.json` (copied from the shipped file on
+first launch).
+
 ## Connecting Claude Code
+
+**Nothing to install.** Claude Code writes every session to
+`~/.claude/projects/<project>/<session>.jsonl` (`$CLAUDE_CONFIG_DIR/projects` when set),
+and its subagents next to it. The app follows those files, read-only, so every session on
+the machine shows up, whatever the project. At launch, sessions written in the last 10
+minutes appear right away. Set `AGENT_OFFICE_TRANSCRIPTS=0` to turn this off.
+
+Transcripts don't show everything: permission prompts and session ends are missing (an
+agent with no activity for 30 minutes leaves on its own), and the format is internal to
+Claude Code, so a future version may change it. Install the hooks for exact, documented
+events; sessions that send hooks are then taken from the hooks only, never twice.
 
 Install the hooks once, then keep using Claude Code as usual.
 
@@ -84,17 +109,21 @@ appears at reception and walks to its desk.
 
 ### What the office shows
 
-| Claude Code hook                                                                                                               | In the office                                                               |
-| ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| `SessionStart`                                                                                                                 | arrives at reception, walks to a desk                                       |
-| `UserPromptSubmit`                                                                                                             | thinking bubble (`...`)                                                     |
-| `PreToolUse`                                                                                                                   | typing, bubble with the action (`edit src/app.ts`, `npm test`)              |
-| `PostToolUse`                                                                                                                  | thinking again while reading the result                                     |
-| `PermissionRequest`, `Notification` (`permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog`, `agent_needs_input`) | blinking `?` bubble with the question                                       |
-| `PostToolUseFailure`, `StopFailure`                                                                                            | red `!` bubble with the error (an interruption with Esc just makes it idle) |
-| `Stop`, `Notification` (`idle_prompt`)                                                                                         | idle                                                                        |
-| `SubagentStart` / `SubagentStop`                                                                                               | a new character next to its parent / it leaves                              |
-| `SessionEnd`                                                                                                                   | walks out through the front door                                            |
+The table lists hooks. Transcripts give the same picture except the rows marked "hooks
+only": the user prompt, tool calls and results, end of turn, API errors and interruptions
+all appear in them.
+
+| Claude Code hook                                                                                                               | In the office                                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `SessionStart`                                                                                                                 | arrives at reception, walks to a desk (transcripts: on its first prompt)                                  |
+| `UserPromptSubmit`                                                                                                             | thinking bubble (`...`)                                                                                   |
+| `PreToolUse`                                                                                                                   | typing, bubble with the action (`edit src/app.ts`, `npm test`)                                            |
+| `PostToolUse`                                                                                                                  | thinking again while reading the result                                                                   |
+| `PermissionRequest`, `Notification` (`permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog`, `agent_needs_input`) | blinking `?` bubble with the question (hooks only)                                                        |
+| `PostToolUseFailure`, `StopFailure`                                                                                            | red `!` bubble with the error (an interruption with Esc just makes it idle; transcripts: API errors only) |
+| `Stop`, `Notification` (`idle_prompt`)                                                                                         | idle                                                                                                      |
+| `SubagentStart` / `SubagentStop`                                                                                               | a new character next to its parent / it leaves                                                            |
+| `SessionEnd`                                                                                                                   | walks out through the front door (hooks only; otherwise after 30 min of silence)                          |
 
 - An idle agent stays at its desk, then goes for coffee 15 s after its last event. Waiting
   and failing agents stay at their desk so you can spot them.
@@ -211,14 +240,15 @@ blocks DNS rebinding: a web page you visit cannot inject fake agents.
 
 ## Configuration
 
-| Variable              | Where            | Default                                | Purpose                                                     |
-| --------------------- | ---------------- | -------------------------------------- | ----------------------------------------------------------- |
-| `AGENT_OFFICE_PORT`   | app              | `4777`                                 | Server port                                                 |
-| `AGENT_OFFICE_TOKEN`  | app and adapters | none                                   | When set, every POST must send it in `X-Agent-Office-Token` |
-| `AGENT_OFFICE_CONFIG` | app              | `office.config.json` in the app folder | Role rules file                                             |
-| `AGENT_OFFICE_DEMO`   | app              | none                                   | `1` turns on demo mode, like `npm run demo`                 |
-| `AGENT_OFFICE_URL`    | adapters         | `http://127.0.0.1:4777`                | Where the adapters send events                              |
-| `AGENT_OFFICE_DEBUG`  | adapters         | none                                   | `1` prints adapter failures on stderr                       |
+| Variable                   | Where            | Default                                | Purpose                                                     |
+| -------------------------- | ---------------- | -------------------------------------- | ----------------------------------------------------------- |
+| `AGENT_OFFICE_PORT`        | app              | `4777`                                 | Server port                                                 |
+| `AGENT_OFFICE_TOKEN`       | app and adapters | none                                   | When set, every POST must send it in `X-Agent-Office-Token` |
+| `AGENT_OFFICE_CONFIG`      | app              | `office.config.json` in the app folder | Role rules file                                             |
+| `AGENT_OFFICE_DEMO`        | app              | none                                   | `1` turns on demo mode, like `npm run demo`                 |
+| `AGENT_OFFICE_TRANSCRIPTS` | app              | on                                     | `0` stops following Claude Code transcripts                 |
+| `AGENT_OFFICE_URL`         | adapters         | `http://127.0.0.1:4777`                | Where the adapters send events                              |
+| `AGENT_OFFICE_DEBUG`       | adapters         | none                                   | `1` prints adapter failures on stderr                       |
 
 When you use a token, the adapters must see it too: set `AGENT_OFFICE_TOKEN` in the
 environment Claude Code is started from, or in the `env` section of its settings.
@@ -233,6 +263,7 @@ npm run typecheck    # TypeScript, strict
 npm run lint         # ESLint
 npm run format       # Prettier (format:check only reports)
 npm run build        # production build into out/; npm start previews it
+npm run dist         # Windows portable executable: dist/MyPixelTeam.exe
 npx tsx scripts/sprite-preview.ts out.png   # contact sheet of every character variant
 ```
 
@@ -248,11 +279,12 @@ adapters/            hook scripts run by the CLIs (plain Node, no dependencies)
 scripts/setup.mjs    install / uninstall hooks in a CLI's config
 src/shared/          pure TypeScript, no Electron or DOM
   protocol/          event schema (zod)
-  normalize/         raw hook payload -> protocol events, one file per CLI
+  normalize/         raw hook payload -> protocol events, one file per CLI;
+                     claude-transcript.ts does the same for transcript lines
   config/            office.config.json schema and role rules
   engine/            office state, floor plan, A* pathfinding, seat assignment, simulation
   demo/              the simulated agents of `npm run demo`
-src/main/            Electron main process: HTTP server, config, IPC
+src/main/            Electron main process: HTTP server, transcript watcher, config, IPC
 src/preload/         the bridge exposed to the page
 src/renderer/        canvas rendering: scenery, pixel-art characters, side panel
 tests/               vitest; tests/fixtures/<cli>/ holds real hook payloads
@@ -285,7 +317,9 @@ already knows the Claude Code, Codex and Gemini tool names.
 | Office, characters, animations | done                            |
 | Local server and protocol v1   | done                            |
 | Demo mode                      | done                            |
-| Claude Code                    | done, tested with live sessions |
+| Claude Code (hooks)            | done, tested with live sessions |
+| Claude Code (transcripts)      | done, tested with live sessions |
+| Windows executable             | done, unsigned                  |
 | Codex CLI                      | planned                         |
 | Gemini CLI                     | planned                         |
 

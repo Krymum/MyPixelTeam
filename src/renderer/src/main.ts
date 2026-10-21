@@ -246,6 +246,13 @@ async function refreshStatus(): Promise<void> {
     badge.textContent = "DEMO";
     parts.push(badge);
   }
+  if (info.transcripts) {
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = "ALL CLAUDE SESSIONS";
+    badge.title = `Following transcripts in ${info.transcripts}`;
+    parts.push(badge);
+  }
   if (info.configError) {
     const warn = document.createElement("span");
     warn.className = "bad";
