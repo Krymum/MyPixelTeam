@@ -1,13 +1,19 @@
 import { summarizeTool } from "../../shared/normalize/tool-summary";
 import type { AgentQuestion, IssueDetail, Project } from "../../shared/work/types";
-import { ticketsInstructions } from "./ticket-drafts";
+import { MAX_TICKETS, TICKETS_FILE, ticketsInstructions } from "./ticket-drafts";
 
 /** The prompt a ticket becomes, and how the runner reads `claude -p` stream-json output. */
 
 export function buildPrompt(
   issue: IssueDetail,
   project: Project,
-  where: { branch: string; base: string; existing: boolean; earlier?: EarlierTicket[] },
+  where: {
+    branch: string;
+    base: string;
+    existing: boolean;
+    earlier?: EarlierTicket[];
+    planOnly?: boolean;
+  },
 ): string {
   const lines = [
     `You are working on the ${project.tracker.kind === "jira" ? "Jira ticket" : "GitHub issue"} ${issue.key} (${issue.type}${issue.priority ? `, priority ${issue.priority}` : ""}).`,
@@ -26,7 +32,9 @@ export function buildPrompt(
     lines.push("", "This ticket is an epic. Its tickets already exist:");
     for (const c of issue.children) lines.push(`- ${c.key} ${c.summary} (${c.status})`);
     lines.push(
-      "Do not create them again. An agent works on one ticket at a time, so the work itself is done on those tickets, not here. Unless this epic asks for something of its own that none of them covers, change nothing and end by saying which ticket to start with and why.",
+      where.planOnly
+        ? "Do not create them again: add only the tickets the epic still misses, if any."
+        : "Do not create them again. An agent works on one ticket at a time, so the work itself is done on those tickets, not here. Unless this epic asks for something of its own that none of them covers, change nothing and end by saying which ticket to start with and why.",
     );
   }
   if (where.earlier?.length) {
@@ -42,21 +50,38 @@ export function buildPrompt(
     lines.push("", "Latest comments:");
     for (const c of comments) lines.push(`- ${c.author}: ${c.text.replace(/\s+/g, " ").trim()}`);
   }
-  lines.push(
-    "",
-    where.existing
-      ? `You are in a git worktree of ${project.repo.fullName} on the existing branch ${where.branch}, where work on this ticket may already have started: \`git log origin/${where.base}..HEAD\` shows it. Build on it rather than starting over.`
-      : `You are in a git worktree of ${project.repo.fullName} on the branch ${where.branch}, created from ${where.base}.`,
-    "Implement the ticket in this repository, following the conventions of the existing code.",
-    workingInstructions(),
-    "Do not commit, push or open a pull request: this is done for you when you finish.",
-    "If the ticket is unclear or can't be done, change nothing and explain why.",
-    ticketsInstructions(),
-    "End with a summary of what you did, how you checked it, and anything the next person needs to know (decisions taken, what is left, open questions). It becomes the pull request description and is posted on the ticket.",
-  );
+  if (where.planOnly) lines.push("", ...planInstructions(issue.key));
+  else
+    lines.push(
+      "",
+      where.existing
+        ? `You are in a git worktree of ${project.repo.fullName} on the existing branch ${where.branch}, where work on this ticket may already have started: \`git log origin/${where.base}..HEAD\` shows it. Build on it rather than starting over.`
+        : `You are in a git worktree of ${project.repo.fullName} on the branch ${where.branch}, created from ${where.base}.`,
+      "Implement the ticket in this repository, following the conventions of the existing code.",
+      workingInstructions(),
+      "Do not commit, push or open a pull request: this is done for you when you finish.",
+      "If the ticket is unclear or can't be done, change nothing and explain why.",
+      ticketsInstructions(),
+      "End with a summary of what you did, how you checked it, and anything the next person needs to know (decisions taken, what is left, open questions). It becomes the pull request description and is posted on the ticket.",
+    );
   if (project.agent.instructions?.trim())
     lines.push("", "Project instructions:", project.agent.instructions.trim());
   return lines.join("\n");
+}
+
+/**
+ * A planning run only breaks the ticket into tickets: it reads the code to cut the work
+ * well, and its tools can't change the repository.
+ */
+export function planInstructions(key: string): string[] {
+  return [
+    `Your only job is to break ${key} into tickets; agents do each of them later. You are in a git worktree of the repository and can only read files and write the tickets file: nothing else can change, and you have no shell.`,
+    "Read the code just enough to cut the work well: the CLAUDE.md of the repository if there is one, the files the ticket names, targeted searches.",
+    `Write the tickets to ${TICKETS_FILE}, as a JSON list: [{"summary": "Title", "description": "Markdown"}]. Each one is created under ${key}, in that order.`,
+    "Make each ticket a piece of work one agent can do and check in one go, in the order to do them (each builds on the ones before), with a description saying what to change, where, and how to tell it is done. Nothing the ticket doesn't ask for.",
+    `At most ${MAX_TICKETS} tickets. If the ticket is too unclear to break down, write no file and say what is missing.`,
+    "End with a short summary of the breakdown; it is posted on the ticket.",
+  ];
 }
 
 /**
@@ -125,6 +150,7 @@ export function buildContinuePrompt(
   branch: string,
   instruction: string,
   comments: ReviewComment[] = [],
+  planOnly = false,
 ): string {
   const lines = [
     `You are continuing your work on ${issue.key} (${issue.summary}), in the same worktree on the branch ${branch}.`,
@@ -140,9 +166,15 @@ export function buildContinuePrompt(
   }
   lines.push(
     "",
-    "Same rules as before: do not commit, push or open a pull request, this is done for you.",
-    workingInstructions(),
-    ticketsInstructions(),
+    ...(planOnly
+      ? [
+          `Same rules as before: you only write tickets, to ${TICKETS_FILE}. Write only the new ones: those you wrote before already exist.`,
+        ]
+      : [
+          "Same rules as before: do not commit, push or open a pull request, this is done for you.",
+          workingInstructions(),
+          ticketsInstructions(),
+        ]),
     "End with a summary of what you did this time and anything the next person needs to know; it is posted on the ticket.",
   );
   if (project.agent.instructions?.trim())

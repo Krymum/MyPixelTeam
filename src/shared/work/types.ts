@@ -76,6 +76,8 @@ export const AGENT_MODELS = [
 /** Most tickets don't need Opus, which costs several times more. */
 export const DEFAULT_MODEL = "sonnet";
 export const MODEL_PATTERN = /^[\w.:[\]-]*$/;
+/** Breaking a ticket into tickets needs reading, not coding: the cheapest model does it. */
+export const PLAN_MODEL = "haiku";
 
 /** The model an agent on this project uses unless the ticket's run picks another. */
 export const projectModel = (project: Pick<Project, "agent">): string =>
@@ -293,6 +295,8 @@ export interface StartRunOptions {
   model?: string;
   /** Start the new branch from this branch on origin instead of the base (an epic's chain). */
   from?: string;
+  /** Only write the tickets this one breaks into, reading the code without changing it. */
+  planOnly?: boolean;
 }
 
 /** What a pull request's checks say: still running, all green, or something failed. */
@@ -400,6 +404,10 @@ export interface RunView {
   ciFixes?: number;
   /** Started as one ticket of this epic, run one after another. */
   epicKey?: string;
+  /** The branch this one was built on (the epic's ticket before), kept up to date with it. */
+  from?: string;
+  /** A planning run: the agent only wrote tickets, under this one. */
+  planOnly?: boolean;
 }
 
 export const isActiveRun = (run: RunView): boolean =>

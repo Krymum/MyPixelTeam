@@ -216,6 +216,38 @@ export async function commitAll(worktree: string, message: string): Promise<bool
   return true;
 }
 
+/**
+ * Merges the latest of `from` on origin into the worktree's branch, for a branch built on
+ * another one that moved since (an epic's earlier ticket fixed after review or checks).
+ * A conflict is left alone: the merge is aborted and the worktree stays as it was.
+ */
+export async function mergeFrom(
+  worktree: string,
+  from: string,
+  auth: GitAuth,
+): Promise<"merged" | "current" | "conflict" | "gone"> {
+  const fetched = await git(["fetch", "origin", from], { cwd: worktree, auth })
+    .then(() => true)
+    .catch(() => false);
+  if (!fetched) return "gone";
+  const behind = await git(["merge-base", "--is-ancestor", `origin/${from}`, "HEAD"], {
+    cwd: worktree,
+  })
+    .then(() => false)
+    .catch(() => true);
+  if (!behind) return "current";
+  const email = await git(["config", "user.email"], { cwd: worktree, allowFailure: true });
+  try {
+    await git([...(email ? [] : FALLBACK_IDENTITY), "merge", "--no-edit", "-q", `origin/${from}`], {
+      cwd: worktree,
+    });
+    return "merged";
+  } catch {
+    await git(["merge", "--abort"], { cwd: worktree, allowFailure: true });
+    return "conflict";
+  }
+}
+
 /** Number of commits on the branch that the default branch doesn't have. */
 export async function commitsAhead(worktree: string, base: string): Promise<number> {
   return Number(await git(["rev-list", "--count", `origin/${base}..HEAD`], { cwd: worktree }));
