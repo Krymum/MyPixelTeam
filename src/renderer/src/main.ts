@@ -8,11 +8,20 @@ import { FRAME_H, FRAME_W } from "./sprites/character-art";
 import type { Pose } from "./sprites/character";
 import { characterSprite, forgetCharacter } from "./sprites/cache";
 import { needsYou } from "../../shared/work/run-state";
-import { trackerLabel } from "../../shared/work/types";
-import { initBoard, resetBoard, showAgents, showIssue, toggleBoard } from "./work/board";
+import { trackerLabel, type RunView } from "../../shared/work/types";
+import {
+  boardBack,
+  focusSearch,
+  initBoard,
+  resetBoard,
+  showAgents,
+  showIssue,
+  toggleBoard,
+} from "./work/board";
 import { waitingRuns } from "./work/questions-ui";
 import { initSettings, openSettings } from "./work/settings";
 import { dismissed } from "./work/dismissed";
+import { initToasts } from "./work/toasts";
 import { checkMachine, initWelcome, openWelcome } from "./work/welcome";
 import { activeProject, loadWork, subscribe, update, work } from "./work/store";
 
@@ -46,6 +55,12 @@ const sim = new OfficeSimulation();
 const drawn = new Set<string>();
 let selectedId: string | undefined;
 let scale = 2;
+/** The app's runs by agent session: their characters go by their ticket. */
+let runsBySession = new Map<string, RunView>();
+
+function runOf(agent: AgentRecord): RunView | undefined {
+  return agent.parentId ? undefined : runsBySession.get(agent.sessionId);
+}
 
 /** Small per-agent number so animations of different agents don't run in lockstep. */
 function phase(id: string): number {
@@ -118,7 +133,13 @@ interface Bubble {
 
 function bubbleFor(actor: Actor, activity: Activity, t: number): Bubble | undefined {
   const agent = actor.agent;
-  if (actor.leaving) return { text: "bye!", bg: "#f4f1e8" };
+  if (actor.leaving) {
+    // The session ends before the app pushes: the character says how it went.
+    const run = runOf(agent);
+    if (run?.status === "publishing") return { text: "pushing…", bg: "#f4f1e8" };
+    if (run?.status === "done" && run.pullRequestUrl) return { text: "PR opened!", bg: "#9ee0ad" };
+    return { text: "bye!", bg: "#f4f1e8" };
+  }
   switch (activity) {
     case "thinking":
       return { text: ".".repeat(1 + (Math.floor(t * 2.5) % 3)).padEnd(3, " "), bg: "#f4f1e8" };
@@ -207,7 +228,12 @@ function draw(dt: number, t: number): void {
   }
 
   for (const actor of actors) {
-    const name = actor.agent.parentId ? `↳ ${actor.agent.name}` : actor.agent.name;
+    const run = runOf(actor.agent);
+    const name = actor.agent.parentId
+      ? `↳ ${actor.agent.name}`
+      : run
+        ? run.issueKey
+        : actor.agent.name;
     drawLabel(name, actor.x * scale, (actor.y + 2) * scale, "#00000099", "#ffffffdd");
   }
 
@@ -239,10 +265,7 @@ function refreshChrome(): void {
     ? (agents[selectedId] ?? sim.actors.get(selectedId)?.agent)
     : undefined;
   const parent = selected?.parentId ? agents[selected.parentId] : undefined;
-  const run =
-    selected && !selected.parentId
-      ? work.runs.find((r) => r.sessionId === selected.sessionId)
-      : undefined;
+  const run = selected && runOf(selected);
   renderPanel(
     panel,
     selected,
@@ -254,7 +277,9 @@ function refreshChrome(): void {
     run && { view: run, openIssue: () => void showIssue(run.projectId, run.issueKey) },
   );
   const count = Object.keys(agents).length;
-  agentCount.textContent = `${count} agent${count === 1 ? "" : "s"} in the office`;
+  agentCount.textContent = count
+    ? `${count} agent${count === 1 ? "" : "s"} in the office`
+    : "Nobody in the office";
 }
 
 async function refreshStatus(): Promise<void> {
@@ -262,11 +287,9 @@ async function refreshStatus(): Promise<void> {
   const parts: HTMLElement[] = [];
   const status = document.createElement("span");
   status.className = info.listening ? "lamp ok" : "lamp bad";
-  status.textContent = info.listening
-    ? "Listening"
-    : `Signals off: ${info.error ?? "unknown error"}`;
+  status.textContent = info.listening ? "Live" : `Not live: ${info.error ?? "unknown error"}`;
   status.title = info.listening
-    ? `Claude Code sessions report to ${info.url}`
+    ? `The office shows Claude Code sessions as they work (they report to ${info.url})`
     : "The office can't hear Claude Code sessions";
   parts.push(status);
   if (info.demo) {
@@ -278,8 +301,8 @@ async function refreshStatus(): Promise<void> {
   if (info.transcripts) {
     const badge = document.createElement("span");
     badge.className = "badge";
-    badge.textContent = "All Claude sessions";
-    badge.title = `Following transcripts in ${info.transcripts}`;
+    badge.textContent = "+ your other sessions";
+    badge.title = `Your Claude Code sessions outside the app show in the office too (from ${info.transcripts})`;
     parts.push(badge);
   }
   if (info.configError) {
@@ -323,6 +346,7 @@ function initWork(): void {
   waitingAgents.addEventListener("click", showAgents);
   window.office.work.onOpenIssue((projectId, key) => void showIssue(projectId, key));
   initBoard(document.querySelector<HTMLElement>("#board")!);
+  initToasts();
   document.querySelector("#open-settings")!.addEventListener("click", () => openSettings());
   document.querySelector("#open-board")!.addEventListener("click", () => toggleBoard());
   projectSelect.addEventListener("change", async () => {
@@ -331,6 +355,9 @@ function initWork(): void {
   });
   let shownProject = activeProject()?.id;
   subscribe(() => {
+    runsBySession = new Map();
+    // Runs come newest first: a continued run takes over its session.
+    for (const run of [...work.runs].reverse()) runsBySession.set(run.sessionId, run);
     renderProjectSelect();
     renderMachineWarning();
     // Questions first: an agent is blocked until it gets an answer.
@@ -368,8 +395,32 @@ async function boot(): Promise<void> {
     refreshChrome();
   });
 
+  document.addEventListener("keydown", (e) => {
+    // Dialogs handle their own keys; typing in a field is not a shortcut.
+    if (document.querySelector("dialog[open]") || e.ctrlKey || e.metaKey || e.altKey) return;
+    const typing = (e.target as HTMLElement).closest("input, textarea, select");
+    if (e.key === "Escape") {
+      if (typing) return void (e.target as HTMLElement).blur();
+      if (selectedId) {
+        selectedId = undefined;
+        refreshChrome();
+      } else boardBack();
+      return;
+    }
+    if (typing) return;
+    if (e.key === "/") {
+      e.preventDefault();
+      focusSearch();
+    } else if (e.key === "t") toggleBoard();
+    else if (e.key === "a") showAgents();
+  });
+
   canvas.addEventListener("click", (e) => {
-    selectedId = actorAt(e.clientX, e.clientY)?.id;
+    const actor = actorAt(e.clientX, e.clientY);
+    selectedId = actor?.id;
+    // An agent of the app: its ticket says more than the session's details.
+    const run = actor && runOf(actor.agent);
+    if (run) void showIssue(run.projectId, run.issueKey);
     refreshChrome();
   });
   // The stage changes size with the window and when the ticket board opens or closes.

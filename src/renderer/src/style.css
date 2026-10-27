@@ -1380,3 +1380,85 @@ a.button.primary {
 a.button.primary:hover {
   background: color-mix(in srgb, var(--accent) 85%, white);
 }
+
+/* ---- Character panel ---- */
+
+.panel-ticket {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin-bottom: 14px;
+}
+
+#panel > button.primary,
+#panel > a {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.session-details {
+  margin-bottom: 18px;
+}
+
+.session-details > summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.session-details dl {
+  margin-top: 10px;
+}
+
+/* ---- Toasts ---- */
+
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.toast {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 8px 10px 14px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ok);
+  border-radius: var(--r-card);
+  background: var(--raised);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+  animation: slide-left 220ms var(--ease);
+}
+
+.toast.bad {
+  border-left-color: var(--bad);
+}
+
+.toast-body {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-body .muted {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toast .close {
+  flex: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  #board {
+    animation: none;
+  }
+}

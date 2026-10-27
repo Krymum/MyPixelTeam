@@ -14,10 +14,16 @@
       <span class="brand" id="brand">MyPixelTeam</span>
       <span class="work-controls">
         <select id="project-select" title="Project the agents work on"></select>
-        <button id="open-board" type="button">Tickets</button>
+        <button id="open-board" type="button" title="Tickets (T, or / to search)">Tickets</button>
         <button id="open-settings" type="button">Settings</button>
         <button id="machine-warning" type="button" class="warning" hidden></button>
-        <button id="waiting-agents" type="button" class="waiting" hidden></button>
+        <button
+          id="waiting-agents"
+          type="button"
+          class="waiting"
+          title="What needs you (A)"
+          hidden
+        ></button>
       </span>
       <span id="server-status"></span>
       <span id="agent-count"></span>

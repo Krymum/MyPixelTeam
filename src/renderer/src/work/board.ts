@@ -58,6 +58,11 @@ const chosenModel = new Map<string, string>();
 
 export function initBoard(node: HTMLElement): void {
   board = node;
+  document.addEventListener("keydown", (e) => {
+    // From the search box too; a text area or a menu keeps its arrows.
+    const target = e.target as HTMLElement;
+    if (!board.hidden && !target.closest("textarea, select, dialog")) moveInList(e);
+  });
   subscribe(() => {
     if (board.hidden) return;
     if (tab === "agents") renderAgents();
@@ -78,6 +83,36 @@ export function resetBoard(): void {
   view = { kind: "list" };
   issues = undefined;
   if (!board.hidden) render();
+}
+
+/** "/" from anywhere: the ticket list, ready to type. */
+export function focusSearch(): void {
+  tab = "tickets";
+  view = { kind: "list" };
+  toggleBoard(true);
+  board.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
+}
+
+/** Escape: a ticket goes back to the list, the list closes the board. False when closed. */
+export function boardBack(): boolean {
+  if (board.hidden) return false;
+  if (tab === "tickets" && view.kind !== "list") {
+    view = { kind: "list" };
+    render();
+  } else toggleBoard(false);
+  return true;
+}
+
+/** Up and down move between the rows of the list. */
+function moveInList(e: KeyboardEvent): void {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  const rows = [...board.querySelectorAll<HTMLElement>("ul.issues .row-main")];
+  if (!rows.length) return;
+  const at = rows.indexOf(document.activeElement as HTMLElement);
+  const next = e.key === "ArrowDown" ? Math.min(at + 1, rows.length - 1) : Math.max(at - 1, 0);
+  if (at === -1 && e.key === "ArrowUp") return;
+  e.preventDefault();
+  rows[at === -1 ? 0 : next]!.focus();
 }
 
 /** Opens the Agents tab, where waiting agents are listed with their questions. */
@@ -884,17 +919,23 @@ function latestRun(run: RunView): RunView | undefined {
 const clock = (at: number): string =>
   new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-/** What today's runs cost, and how many agents may work at once. */
+/** What today brought and cost, and how many agents may work at once. */
 function usageLine(): HTMLElement {
   const midnight = new Date().setHours(0, 0, 0, 0);
   const today = work.runs.filter((r) => r.startedAt >= midnight);
   const cost = today.reduce((sum, r) => sum + (r.costUsd ?? 0), 0);
+  const pulls = new Set(
+    today.filter((r) => r.status === "done" && r.pullRequestUrl).map((r) => r.pullRequestUrl),
+  ).size;
   const queued = work.runs.filter((r) => r.status === "queued").length;
   const line = el("div", undefined, "usage");
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   line.append(
     el(
       "span",
-      `Today: $${cost.toFixed(2)} over ${today.length} run${today.length === 1 ? "" : "s"}`,
+      today.length
+        ? `Today: ${pulls ? `${plural(pulls, "pull request")}, ` : ""}$${cost.toFixed(2)} over ${plural(today.length, "run")}`
+        : "Nothing run today yet",
     ),
     el(
       "span",
