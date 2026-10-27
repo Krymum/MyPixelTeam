@@ -40,7 +40,8 @@ export function buildPrompt(
     where.existing
       ? `You are in a git worktree of ${project.repo.fullName} on the existing branch ${where.branch}, where work on this ticket may already have started: \`git log origin/${where.base}..HEAD\` shows it. Build on it rather than starting over.`
       : `You are in a git worktree of ${project.repo.fullName} on the branch ${where.branch}, created from ${where.base}.`,
-    "Implement the ticket in this repository. Follow the conventions of the existing code and run the relevant tests or checks if the project has them.",
+    "Implement the ticket in this repository, following the conventions of the existing code.",
+    workingInstructions(),
     "Do not commit, push or open a pull request: this is done for you when you finish.",
     "If the ticket is unclear or can't be done, change nothing and explain why.",
     ticketsInstructions(),
@@ -49,6 +50,18 @@ export function buildPrompt(
   if (project.agent.instructions?.trim())
     lines.push("", "Project instructions:", project.agent.instructions.trim());
   return lines.join("\n");
+}
+
+/**
+ * Keeps a run cheap: agents tend to tour the repository and rerun everything, which costs
+ * more than the change itself.
+ */
+export function workingInstructions(): string {
+  return [
+    "Read only what the ticket needs: start from the files it names, the CLAUDE.md of the repository if there is one, and targeted searches, not a tour of the code.",
+    "Check your change the cheapest way that proves it: type-check, lint and run the tests that cover what you changed. Leave the full test suite, end-to-end runs and starting the whole stack to CI, unless the ticket is about them or nothing else can check it.",
+    "Take screenshots only when the ticket changes what people see, and as few as you need: every image costs a lot.",
+  ].join("\n");
 }
 
 /** A comment left on the pull request, inline on a file or on the whole change. */
@@ -84,6 +97,7 @@ export function buildContinuePrompt(
   lines.push(
     "",
     "Same rules as before: do not commit, push or open a pull request, this is done for you.",
+    workingInstructions(),
     ticketsInstructions(),
     "End with a summary of what you did this time and anything the next person needs to know; it is posted on the ticket.",
   );

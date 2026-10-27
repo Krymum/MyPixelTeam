@@ -4,6 +4,7 @@ import { app, dialog, ipcMain, shell, type BrowserWindow } from "electron";
 import { WORK_CALLS, type WorkApi } from "../../preload/api";
 import {
   baseBranchOf,
+  isActiveRun,
   isPreviewable,
   type GitProviderId,
   type RepoSummary,
@@ -14,6 +15,7 @@ import { discoverProjects, recentFolders, unreachable, type DiscoverOptions } fr
 import { DeviceLogin, githubCliToken, githubClientId } from "../integrations/github-login";
 import { checkEnvironment, exec } from "./environment";
 import { hooksStatus, installHooks, uninstallHooks } from "./hooks";
+import { guideTicket, hasAgentGuide } from "./project-guide";
 import type { AgentRunner } from "./runner";
 import type { WorkspaceStore } from "./workspace";
 
@@ -184,6 +186,14 @@ export function registerWorkIpc(deps: {
     },
     startRun: async (projectId, key, options) => runner.start(projectId, key, options),
     cancelRun: async (id) => runner.cancel(id),
+    agentGuide: (projectId) => hasAgentGuide(workspace.get(projectId)),
+    prepareProject: async (projectId) => {
+      const key = await guideTicket(tracker(projectId));
+      // Already on it: the ticket shows that agent.
+      if (!runner.list().some((r) => r.issueKey === key && isActiveRun(r)))
+        runner.start(projectId, key);
+      return key;
+    },
     answerQuestion: async (runId, questionId, answer, message) =>
       runner.answer(runId, questionId, answer, message),
     continueRun: async (runId, instruction, options) =>

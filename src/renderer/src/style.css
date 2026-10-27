@@ -1019,3 +1019,16 @@ button.waiting {
     transition: none !important;
   }
 }
+
+.guide-offer {
+  margin-bottom: 12px;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.guide-offer p {
+  margin: 0;
+}
+
+.guide-offer button {
+  justify-self: start;
+}
