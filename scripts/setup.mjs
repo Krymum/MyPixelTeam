@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Installs or removes the Agent Office hooks for a CLI. Never writes silently: it shows
+// Installs or removes the MyPixelTeam hooks for a CLI. Never writes silently: it shows
 // what will change, asks for confirmation (or --yes), and backs up the file first.
 //
 //   node scripts/setup.mjs claude [--user | --project [dir]] [--uninstall] [--dry-run] [--yes]
@@ -99,7 +99,7 @@ async function main() {
   const after = uninstall ? target.uninstall(before) : target.install(before, command);
   const unchanged = JSON.stringify(before) === JSON.stringify(after);
 
-  console.log(`${target.label} — ${uninstall ? "remove" : "install"} Agent Office hooks`);
+  console.log(`${target.label} — ${uninstall ? "remove" : "install"} MyPixelTeam hooks`);
   console.log(`  file:    ${file}${existsSync(file) ? "" : " (will be created)"}`);
   if (!uninstall) {
     console.log(`  command: ${command}`);

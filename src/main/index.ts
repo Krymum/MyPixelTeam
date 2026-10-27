@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, safeStorage, shell } from "electron";
 import { IPC, type ServerInfo } from "../preload/api";
 import { createRoleResolver, DEFAULT_CONFIG } from "../shared/config/office-config";
 import { createDemoScenario } from "../shared/demo/scenario";
@@ -10,6 +10,18 @@ import type { OfficeEvent } from "../shared/protocol/schema";
 import { loadConfig, watchConfig, type LoadedConfig } from "./config";
 import { createIngestServer, listen } from "./server";
 import { defaultTranscriptRoot, TranscriptWatcher } from "./transcripts";
+import { settingsPath } from "../../scripts/setup/claude.mjs";
+import { AccountStore } from "./work/accounts";
+import { registerWorkIpc } from "./work/ipc";
+import { Notifier } from "./work/notify";
+import { AgentRunner } from "./work/runner";
+import { WorkspaceStore } from "./work/workspace";
+
+// The app was called Agent Office: its accounts, projects, clones and worktrees live in
+// %APPDATA%/agent-office (worktrees are registered in the clones by absolute path, so the
+// folder can't simply move). Keep it, unless --user-data-dir says otherwise.
+if (!app.commandLine.hasSwitch("user-data-dir"))
+  app.setPath("userData", join(app.getPath("appData"), "agent-office"));
 
 const PORT = Number(process.env.AGENT_OFFICE_PORT ?? 4777);
 const TOKEN = process.env.AGENT_OFFICE_TOKEN || undefined;
@@ -34,24 +46,36 @@ function defaultConfigPath(): string {
   return path;
 }
 
-const info: ServerInfo = { url: `http://127.0.0.1:${PORT}`, listening: false, demo: DEMO };
+const OPEN = process.env.AGENT_OFFICE_OPEN;
+const info: ServerInfo = {
+  url: `http://127.0.0.1:${PORT}`,
+  listening: false,
+  demo: DEMO,
+  openOnStart: OPEN === "board" || OPEN === "settings" ? OPEN : undefined,
+};
 let win: BrowserWindow | null = null;
 let resolveRole = createRoleResolver(DEFAULT_CONFIG);
+let runner: AgentRunner | undefined;
+let notifier: Notifier | undefined;
 
 function useConfig(loaded: LoadedConfig): void {
   resolveRole = createRoleResolver(loaded.config);
   info.configPath = loaded.path;
   info.configError = loaded.error;
-  if (loaded.error) console.error(`[agent-office] ${loaded.path} ignored: ${loaded.error}`);
-  else console.log(`[agent-office] roles from ${loaded.path}`);
+  if (loaded.error) console.error(`[mypixelteam] ${loaded.path} ignored: ${loaded.error}`);
+  else console.log(`[mypixelteam] roles from ${loaded.path}`);
 }
 
 function publish(raw: OfficeEvent): void {
+  // An agent working on a ticket is named after it.
+  const run = raw.parentAgentId ? undefined : runner?.bySession(raw.sessionId);
+  const named = run ? { ...raw, agentName: run.issueKey } : raw;
   // Roles are decided once here so every consumer (and the history) agrees.
-  const event = { ...raw, role: resolveRole(raw) };
+  const event = { ...named, role: resolveRole(named) };
   history.push(event);
   if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT);
   win?.webContents.send(IPC.event, event);
+  notifier?.event(event);
 }
 
 function createWindow(): void {
@@ -60,7 +84,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 960,
     minHeight: 600,
-    title: "Agent Office",
+    title: "MyPixelTeam",
     backgroundColor: "#1b1b24",
     autoHideMenuBar: true,
     webPreferences: {
@@ -105,7 +129,7 @@ function startTranscripts(): void {
   });
   watcher.start();
   info.transcripts = root;
-  console.log(`[agent-office] following Claude Code transcripts in ${root}`);
+  console.log(`[mypixelteam] following Claude Code transcripts in ${root}`);
 }
 
 async function startServer(): Promise<void> {
@@ -120,12 +144,15 @@ async function startServer(): Promise<void> {
   try {
     await listen(server, PORT);
     info.listening = true;
-    console.log(`[agent-office] listening on ${info.url}${TOKEN ? " (token required)" : ""}`);
+    console.log(`[mypixelteam] listening on ${info.url}${TOKEN ? " (token required)" : ""}`);
   } catch (err) {
     info.error = err instanceof Error ? err.message : String(err);
-    console.error(`[agent-office] could not listen on ${info.url}: ${info.error}`);
+    console.error(`[mypixelteam] could not listen on ${info.url}: ${info.error}`);
   }
 }
+
+// Windows shows notifications under this name.
+if (process.platform === "win32") app.setAppUserModelId("MyPixelTeam");
 
 // A second launch would fail to bind the port: focus the running window instead.
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -134,9 +161,74 @@ app.on("second-instance", () => {
   win?.focus();
 });
 
+/**
+ * The hook script Claude Code runs. The portable .exe unpacks itself to a new temporary
+ * folder on every launch, so it copies the script to the user data folder, which stays put.
+ */
+function adapterPath(): string {
+  if (!app.isPackaged) return join(app.getAppPath(), "adapters", "claude-code.mjs");
+  const shipped = join(process.resourcesPath, "app.asar.unpacked", "adapters");
+  const target = join(app.getPath("userData"), "adapters");
+  mkdirSync(target, { recursive: true });
+  for (const file of ["claude-code.mjs", "forward.mjs"])
+    copyFileSync(join(shipped, file), join(target, file));
+  return join(target, "claude-code.mjs");
+}
+
+/** Jira, code hosts and the agents the app starts on tickets. */
+function startWork(): void {
+  const data = app.getPath("userData");
+  const accounts = new AccountStore(join(data, "accounts.bin"), {
+    available: () => safeStorage.isEncryptionAvailable(),
+    encrypt: (plain) => safeStorage.encryptString(plain),
+    decrypt: (blob) => safeStorage.decryptString(blob),
+  });
+  const workspace = new WorkspaceStore(join(data, "workspace.json"), join(data, "repos"));
+  const worktreesDir = join(data, "worktrees");
+  const claude = process.env.AGENT_OFFICE_CLAUDE || "claude";
+  notifier = new Notifier({
+    enabled: () => workspace.view().notifications,
+    window: () => win,
+    openIssue: (run) => win?.webContents.send(IPC.openIssue, run.projectId, run.issueKey),
+  });
+  runner = new AgentRunner({
+    accounts,
+    workspace,
+    worktreesDir,
+    claude,
+    historyPath: join(data, "runs.json"),
+    onChange: (runs) => win?.webContents.send(IPC.runs, runs),
+    onFinished: (run) => notifier?.run(run),
+    // The character walks in right away; transcripts (or hooks) then show its work.
+    onSession: (run, phase) =>
+      publish({
+        v: 1,
+        type: phase === "started" ? "agent.started" : "agent.ended",
+        source: "claude-code",
+        sessionId: run.sessionId,
+        agentId: run.sessionId,
+        agentName: run.issueKey,
+        cwd: run.worktree,
+        timestamp: new Date().toISOString(),
+        detail: phase === "started" ? { message: run.issueSummary } : {},
+      }),
+  });
+  registerWorkIpc({
+    accounts,
+    workspace,
+    runner,
+    window: () => win,
+    claude,
+    transcriptRoot: defaultTranscriptRoot(app.getPath("home")),
+    ownFolders: [worktreesDir],
+    hooks: { settingsPath: settingsPath("user"), adapterPath: adapterPath() },
+  });
+}
+
 app.whenReady().then(async () => {
   ipcMain.handle(IPC.history, () => history);
   ipcMain.handle(IPC.info, () => info);
+  startWork();
   useConfig(loadConfig(CONFIG_PATH));
   watchConfig(CONFIG_PATH, useConfig);
   await startServer();
@@ -152,7 +244,7 @@ app.whenReady().then(async () => {
       async () => {
         const image = await win?.webContents.capturePage();
         if (image) await writeFile(shot, image.toPNG());
-        console.log(`[agent-office] screenshot saved to ${shot}`);
+        console.log(`[mypixelteam] screenshot saved to ${shot}`);
       },
       Number(process.env.AGENT_OFFICE_SCREENSHOT_DELAY ?? 12000),
     );
@@ -162,6 +254,8 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
+
+app.on("before-quit", () => runner?.stopAll());
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

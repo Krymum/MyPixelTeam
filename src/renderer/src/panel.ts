@@ -1,22 +1,6 @@
 import type { AgentRecord } from "../../shared/engine/office-state";
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  text?: string,
-  className?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (text !== undefined) node.textContent = text;
-  if (className) node.className = className;
-  return node;
-}
-
-function formatDuration(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`;
-}
+import type { RunView } from "../../shared/work/types";
+import { button, el, formatDuration, link } from "./dom";
 
 /** Side panel with the details and recent timeline of the selected agent. */
 export function renderPanel(
@@ -24,6 +8,8 @@ export function renderPanel(
   agent: AgentRecord | undefined,
   parentName: string | undefined,
   onClose: () => void,
+  /** Set when the app started this agent on a Jira ticket. */
+  run?: { view: RunView; openIssue: () => void },
 ): void {
   panel.hidden = !agent;
   if (!agent) return;
@@ -44,6 +30,16 @@ export function renderPanel(
 
   const dl = el("dl");
   for (const [k, v] of facts) dl.append(el("dt", k), el("dd", v));
+  if (run) {
+    const ticket = el("dd");
+    ticket.append(button(`${run.view.issueKey} · ${run.view.issueSummary}`, run.openIssue, "link"));
+    dl.append(el("dt", "ticket"), ticket, el("dt", "run"), el("dd", run.view.status));
+    if (run.view.pullRequestUrl) {
+      const dd = el("dd");
+      dd.append(link("pull request", run.view.pullRequestUrl));
+      dl.append(el("dt", "PR"), dd);
+    }
+  }
 
   const ol = el("ol");
   for (const e of [...agent.history].reverse().slice(0, 30)) {

@@ -1,4 +1,4 @@
-// Pure helpers that add/remove the Agent Office hooks in a Claude Code settings object.
+// Pure helpers that add/remove the MyPixelTeam hooks in a Claude Code settings object.
 // Docs: https://code.claude.com/docs/en/hooks
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -38,7 +38,7 @@ export function isOurs(handler) {
   return typeof handler?.command === "string" && OURS.test(handler.command);
 }
 
-/** Returns a copy of `settings` without any Agent Office hook, pruning empty groups. */
+/** Returns a copy of `settings` without any MyPixelTeam hook, pruning empty groups. */
 export function uninstall(settings) {
   const next = structuredClone(settings ?? {});
   if (!next.hooks || typeof next.hooks !== "object") return next;
@@ -54,7 +54,7 @@ export function uninstall(settings) {
   return next;
 }
 
-/** Returns a copy of `settings` with the Agent Office hooks (re)installed. */
+/** Returns a copy of `settings` with the MyPixelTeam hooks (re)installed. */
 export function install(settings, command) {
   const next = uninstall(settings);
   next.hooks ??= {};

@@ -6,19 +6,28 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     />
-    <title>Agent Office</title>
+    <title>MyPixelTeam</title>
     <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
     <header id="topbar">
-      <span class="brand">Agent Office</span>
+      <span class="brand">MyPixelTeam</span>
+      <span class="work-controls">
+        <select id="project-select" title="Project the agents work on"></select>
+        <button id="open-board" type="button">Tickets</button>
+        <button id="open-settings" type="button">Settings</button>
+        <button id="machine-warning" type="button" class="warning" hidden></button>
+      </span>
       <span id="server-status"></span>
       <span id="agent-count"></span>
     </header>
     <main>
       <div id="stage"><canvas id="office"></canvas></div>
+      <aside id="board" hidden></aside>
       <aside id="panel" hidden></aside>
     </main>
+    <dialog id="settings"></dialog>
+    <dialog id="welcome"></dialog>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

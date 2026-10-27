@@ -1,5 +1,5 @@
 // Shared hook forwarder: reads the hook's JSON payload on stdin and POSTs it, untouched,
-// to Agent Office at /ingest/<source>. The app does the normalization.
+// to MyPixelTeam at /ingest/<source>. The app does the normalization.
 //
 // It must never slow down or break the agent: short timeouts, no output, errors
 // swallowed, always exit 0 (exit code 2 would block the agent's action).
@@ -45,7 +45,7 @@ export async function forward(source, transform = (body) => body) {
     });
   } catch (err) {
     // App not running, timeout, bad payload: none of these are the agent's problem.
-    if (process.env.AGENT_OFFICE_DEBUG === "1") console.error(`[agent-office] ${err}`);
+    if (process.env.AGENT_OFFICE_DEBUG === "1") console.error(`[mypixelteam] ${err}`);
   } finally {
     process.exit(0);
   }

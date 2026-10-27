@@ -1,4 +1,4 @@
-# Agent Office
+# MyPixelTeam
 
 A pixel-art open space where your AI coding agents live and work.
 
@@ -7,10 +7,14 @@ little 16-bit character. It walks in through the front door, sits at a desk in i
 room, types while it uses tools, thinks, waits for you, goes for coffee when idle, and leaves
 when the session ends. Subagents spawn next to their parent and head to their own room.
 
-Agent Office only **observes**: it never calls a model API and never drives your agents.
-Claude Code sessions are picked up from the transcripts Claude Code already writes, with no
-setup. CLIs can also report what they do through their own hook systems to a small local
-HTTP server inside the app.
+MyPixelTeam **observes** the agents you run yourself: Claude Code sessions are picked up
+from the transcripts Claude Code already writes, with no setup. CLIs can also report what
+they do through their own hook systems to a small local HTTP server inside the app.
+
+It is also a **work tool**: connect GitHub (or Bitbucket), and Jira if your tickets live
+there, pick a project, and put an agent on a ticket. The app runs Claude Code on it in its
+own git worktree, moves the ticket along, and opens the pull request (see
+[Working on tickets](#working-on-tickets)).
 
 ```
  Claude Code ──writes──▶ ~/.claude/projects/**/*.jsonl ──read──────────────▶ the office
@@ -26,8 +30,8 @@ HTTP server inside the app.
 ## Quick start
 
 ```bash
-git clone <this repo> agent-office
-cd agent-office
+git clone <this repo> mypixelteam
+cd mypixelteam
 npm install        # also downloads the Electron binary
 npm run demo       # opens the office with six simulated agents
 ```
@@ -51,8 +55,9 @@ npm run dist       # builds dist/MyPixelTeam.exe, a single portable file
 ```
 
 Copy the `.exe` anywhere and double-click it; launching it twice focuses the open window.
-It is unsigned, so SmartScreen may ask for confirmation the first time. If you installed
-the hooks, they point at `adapters/` in this repo, so keep the repo where it is. In the `.exe`, the role
+It is unsigned, so SmartScreen may ask for confirmation the first time. Hooks installed
+from the `.exe` run a copy of the hook script kept in `%APPDATA%gent-officedapters`,
+refreshed at each launch, so the `.exe` can be moved freely. In the `.exe`, the role
 rules live in `%APPDATA%\agent-office\office.config.json` (copied from the shipped file on
 first launch).
 
@@ -90,14 +95,14 @@ The setup script never changes anything silently:
 - it backs up the existing file as `<file>.bak-YYYYMMDD-HHMMSS` (UTC) before writing;
 - it keeps every hook you already have and is safe to run twice;
 - `--dry-run` prints the resulting file without writing it;
-- `--uninstall` removes only the Agent Office hooks.
+- `--uninstall` removes only the MyPixelTeam hooks.
 
 New Claude Code sessions pick the hooks up. Then open Claude Code in any project: your agent
 appears at reception and walks to its desk.
 
 ### Things to know
 
-- **Agent Office can be closed.** When the app is not running, the hook gives up quickly
+- **MyPixelTeam can be closed.** When the app is not running, the hook gives up quickly
   (500 ms for the request, at most 2 s waiting for its input), prints nothing and exits 0.
   Claude Code is never blocked or slowed down: hooks are installed with `"async": true`
   and `"timeout": 10`.
@@ -176,6 +181,146 @@ To send every agent working in one project to a room, put a rule like this **fir
 
 Set `AGENT_OFFICE_CONFIG=/path/to/office.config.json` to keep the file elsewhere.
 
+## Working on tickets
+
+On first launch a **setup guide** walks through it all:
+
+1. **Your machine**: checks git, Claude Code and its sign-in (`claude auth status`), and
+   says how to fix what is missing. The top bar keeps a warning while agents can't run.
+   One click installs the Claude Code hooks (optional, see
+   [Connecting Claude Code](#connecting-claude-code)); Settings can update or remove them.
+2. **Your accounts**: only what you use. GitHub alone is enough.
+3. **Your projects**: the repositories you used Claude Code in lately, found automatically
+   (see below), each with where its tickets live already chosen. Tick, add, done.
+
+The guide is in **Settings** too, as are the accounts and projects; **Tickets** opens the
+board of the active project.
+
+### Accounts
+
+Every account is optional; a project needs its code host, and Jira only if its tickets are
+there:
+
+| You use                 | Connect            | Tickets come from                 |
+| ----------------------- | ------------------ | --------------------------------- |
+| GitHub only             | GitHub             | the repository's GitHub Issues    |
+| GitHub and Jira         | GitHub and Jira    | GitHub Issues or Jira, by project |
+| Bitbucket (always Jira) | Bitbucket and Jira | Jira                              |
+
+| Service         | What to enter                                                                                                                                                                                                              |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Jira Cloud      | site (`acme` or `acme.atlassian.net`), Atlassian email, [API token](https://id.atlassian.com/manage-profile/security/api-tokens)                                                                                           |
+| GitHub          | [fine-grained token](https://github.com/settings/personal-access-tokens/new) on the repositories agents may use: _Contents_, _Pull requests_ and _Issues_ read & write                                                     |
+| Bitbucket Cloud | Atlassian email and an [API token with scopes](https://id.atlassian.com/manage-profile/security/api-tokens): `read:user`, `read:workspace`, `read:repository`, `write:repository`, `read:pullrequest`, `write:pullrequest` |
+
+GitHub needs no token to create when you can sign in another way:
+
+- **Sign in with GitHub**: the browser opens github.com, you type the code the app shows
+  and approve. This uses a GitHub OAuth app with _Device Flow_ enabled
+  (github.com/settings/developers → New OAuth app). Its client id is public: set it in
+  `DEFAULT_GITHUB_CLIENT_ID` (`src/main/integrations/github-login.ts`) before building, or in
+  `AGENT_OFFICE_GITHUB_CLIENT_ID`. The button only shows when one is set. The token gets
+  the `repo` scope (code, pull requests and issues of every repository you can reach).
+- **Use my GitHub CLI login**: shows when `gh` is installed and signed in, and reuses its
+  token.
+
+Each account is checked against the service before it is saved. Tokens are encrypted with
+the OS keystore (DPAPI on Windows) in `accounts.bin` in the app's user data folder, stay in
+the main process and are never shown again. Git gets them per command as an HTTP header: they
+never land in `.git/config` or in a remote URL.
+
+The app can do what the accounts can do, and nothing more: the ticket view only offers the
+edits, status changes and comments Jira or GitHub allow that account.
+
+### Projects
+
+**Find my projects** (in the guide and in Settings) needs no typing:
+
+- the folders come from the Claude Code transcripts (`~/.claude/projects`), most recent
+  first; agents' own worktrees are left out and a worktree leads to its repository;
+- each folder's `origin` remote names the GitHub or Bitbucket repository, which must be
+  reachable by the connected account (a fine-grained GitHub token only sees the
+  repositories it was given);
+- tickets come from the repository's GitHub Issues, unless Jira is connected and ticket
+  keys in the last 300 commit messages and in branch names (`PROJ-123`) name one of its
+  projects. Either can be changed before adding.
+
+**Add a folder…** does the same for any checkout, and **+ New project** sets one up by
+hand. A project is a repository and where its tickets live (**Tickets from**: its GitHub
+Issues, or a Jira project), plus:
+
+- **Local folder**: an existing clone, or empty to let the app clone into
+  `<user data>/repos/<host>/<owner>/<name>` on the first run.
+- **Agent permissions**: agents run unattended, so anything their mode would ask about is
+  refused. _Edit files only_ (`acceptEdits`, the default) lets them change files but not run
+  commands; _Auto mode_ lets Claude Code judge each command; _Everything_
+  (`bypassPermissions`) is for machines that are a sandbox.
+- **Base branch**: where new ticket branches start and pull requests go (`develop`…);
+  the repository's default branch when empty.
+- **Model** and **instructions** added to every ticket ("run npm test before finishing").
+- **Pull request**: push, open a pull request and move the ticket to review when done, or
+  just commit locally.
+
+The top bar picks the active project.
+
+### Tickets
+
+The board lists open tickets (search text or type a key, `PROJ-12` or `#12`; _done too_
+shows the rest). A ticket shows its description and comments; you can change its summary,
+description and status, comment, and create tickets. A Jira description is saved as plain
+paragraphs, so rich formatting is lost; GitHub keeps its Markdown. GitHub issues are open or
+closed (as completed or not planned).
+
+### Putting an agent on a ticket
+
+Before you start it, **Branch** picks where the agent works. The app asks origin for the
+branches whose name mentions the ticket (`feature/HOT-1279-…`, `hot-1279`, `fix/#12`…): when
+there is one, work may have started there and it is proposed first; otherwise the agent gets
+a new branch from the base.
+
+**▶ Put an agent on it** runs these steps:
+
+1. fetches the base branch and creates a worktree in `<user data>/worktrees/<project>/<KEY>`,
+   on the branch picked or on a new `agent/<KEY>-<summary>` (`agent/issue-12-…` for `#12`);
+   your own checkout is never touched. On an existing branch the agent is told to build on
+   what is there;
+2. moves a Jira ticket to its "in progress" status, when it isn't already;
+3. runs `claude -p` in the worktree with the ticket (title, description, latest comments) as
+   the prompt; the character, named after the ticket, walks in and works like any other;
+4. commits what the agent changed, pushes the branch and opens the pull request to the base
+   branch (or finds the one already open). Only the agent's own work counts: an existing
+   branch that it left untouched is not pushed again. A Jira ticket moves to a "review" status if the workflow has one
+   and gets the pull request link as a comment; a GitHub issue is referenced with
+   `Closes #12`, so merging the pull request closes it.
+
+The **Agents** tab follows every run with its log and cost, and stops a run. Clicking the
+character also links to its ticket and pull request. Running a ticket again reuses its
+worktree and branch, so the new work lands in the same pull request. Closing the app stops
+the agents it started.
+
+Things to know:
+
+- On GitHub, anyone can open an issue on a public repository, and an issue's text becomes
+  the agent's instructions. Agents only take issues opened by the repository's owners,
+  members and collaborators; for anyone else, the ticket shows a warning and the agent
+  starts only once you tick "I read this issue and trust what it asks". Comments from
+  people who aren't collaborators never reach an agent.
+- Claude Code must be installed and signed in on this machine. `AGENT_OFFICE_CLAUDE` points
+  at it when `claude` is not on the `PATH`.
+- Statuses are matched by name and category ("In Progress", "En cours", "Code Review",
+  "Revue"…). When no transition fits, the ticket is left as it is and the log says so.
+- Worktrees stay on disk after a run so you can inspect them; remove them with
+  `git worktree remove`.
+- Runs are kept in `runs.json` in the user data folder (the last 50, with their logs). A
+  run still going when the app crashed shows as failed.
+
+### Notifications
+
+While the window is not in front, a desktop notification tells you when an agent's pull
+request is ready, when an agent failed, and when any agent waits for you (that one needs
+the hooks, see [Connecting Claude Code](#connecting-claude-code)); the taskbar button
+flashes too. Clicking a run notification opens its ticket. Turn them off in Settings.
+
 ## Sending events from anything else
 
 Any program can report to the office with one HTTP request. Only `type`, `source` and
@@ -240,15 +385,17 @@ blocks DNS rebinding: a web page you visit cannot inject fake agents.
 
 ## Configuration
 
-| Variable                   | Where            | Default                                | Purpose                                                     |
-| -------------------------- | ---------------- | -------------------------------------- | ----------------------------------------------------------- |
-| `AGENT_OFFICE_PORT`        | app              | `4777`                                 | Server port                                                 |
-| `AGENT_OFFICE_TOKEN`       | app and adapters | none                                   | When set, every POST must send it in `X-Agent-Office-Token` |
-| `AGENT_OFFICE_CONFIG`      | app              | `office.config.json` in the app folder | Role rules file                                             |
-| `AGENT_OFFICE_DEMO`        | app              | none                                   | `1` turns on demo mode, like `npm run demo`                 |
-| `AGENT_OFFICE_TRANSCRIPTS` | app              | on                                     | `0` stops following Claude Code transcripts                 |
-| `AGENT_OFFICE_URL`         | adapters         | `http://127.0.0.1:4777`                | Where the adapters send events                              |
-| `AGENT_OFFICE_DEBUG`       | adapters         | none                                   | `1` prints adapter failures on stderr                       |
+| Variable                        | Where            | Default                                | Purpose                                                     |
+| ------------------------------- | ---------------- | -------------------------------------- | ----------------------------------------------------------- |
+| `AGENT_OFFICE_PORT`             | app              | `4777`                                 | Server port                                                 |
+| `AGENT_OFFICE_TOKEN`            | app and adapters | none                                   | When set, every POST must send it in `X-Agent-Office-Token` |
+| `AGENT_OFFICE_CONFIG`           | app              | `office.config.json` in the app folder | Role rules file                                             |
+| `AGENT_OFFICE_DEMO`             | app              | none                                   | `1` turns on demo mode, like `npm run demo`                 |
+| `AGENT_OFFICE_TRANSCRIPTS`      | app              | on                                     | `0` stops following Claude Code transcripts                 |
+| `AGENT_OFFICE_CLAUDE`           | app              | `claude`                               | Claude Code CLI used for agents put on tickets              |
+| `AGENT_OFFICE_GITHUB_CLIENT_ID` | app              | none                                   | GitHub OAuth app client id for "Sign in with GitHub"        |
+| `AGENT_OFFICE_URL`              | adapters         | `http://127.0.0.1:4777`                | Where the adapters send events                              |
+| `AGENT_OFFICE_DEBUG`            | adapters         | none                                   | `1` prints adapter failures on stderr                       |
 
 When you use a token, the adapters must see it too: set `AGENT_OFFICE_TOKEN` in the
 environment Claude Code is started from, or in the `env` section of its settings.
@@ -268,7 +415,8 @@ npx tsx scripts/sprite-preview.ts out.png   # contact sheet of every character v
 ```
 
 `AGENT_OFFICE_SCREENSHOT=out.png` saves a capture of the window after 12 s
-(`AGENT_OFFICE_SCREENSHOT_DELAY` in ms changes the delay), handy to check rendering changes.
+(`AGENT_OFFICE_SCREENSHOT_DELAY` in ms changes the delay), handy to check rendering changes;
+`AGENT_OFFICE_OPEN=board` (or `settings`) opens that panel at start for the capture.
 
 ### Project layout
 
@@ -285,8 +433,12 @@ src/shared/          pure TypeScript, no Electron or DOM
   engine/            office state, floor plan, A* pathfinding, seat assignment, simulation
   demo/              the simulated agents of `npm run demo`
 src/main/            Electron main process: HTTP server, transcript watcher, config, IPC
+  integrations/      Jira Cloud, GitHub and Bitbucket REST clients, ADF <-> text;
+                     trackers.ts: tickets from Jira or GitHub Issues behind one interface
+  work/              encrypted accounts, projects, git worktrees, the agent runner
 src/preload/         the bridge exposed to the page
-src/renderer/        canvas rendering: scenery, pixel-art characters, side panel
+src/renderer/        canvas rendering: scenery, pixel-art characters, side panel;
+  src/work/          ticket board and settings dialog
 tests/               vitest; tests/fixtures/<cli>/ holds real hook payloads
 ```
 
@@ -320,11 +472,14 @@ already knows the Claude Code, Codex and Gemini tool names.
 | Claude Code (hooks)            | done, tested with live sessions |
 | Claude Code (transcripts)      | done, tested with live sessions |
 | Windows executable             | done, unsigned                  |
+| Jira Cloud, GitHub, Bitbucket  | done, tested against mocks      |
+| GitHub Issues as tickets       | done, tested against mocks      |
+| Agents on tickets              | done                            |
 | Codex CLI                      | planned                         |
 | Gemini CLI                     | planned                         |
 
-Out of scope for v1: controlling agents from the app, several machines, long-term history,
-a map editor.
+Out of scope for now: Jira Data Center, GitLab, several accounts per service, several
+machines, long-term history, a map editor.
 
 ## Credits
 
