@@ -1,5 +1,6 @@
 import {
   MAX_AGENTS,
+  MAX_CI_FIXES,
   trackerLabel,
   type GitProviderId,
   type JiraProject,
@@ -145,6 +146,30 @@ function preferencesSection(): HTMLElement {
   agents.addEventListener("change", async () => {
     update({ workspace: await api().setPreferences({ maxAgents: Number(agents.value) }) });
   });
+  const budget = select(
+    [
+      ["1", "$1"],
+      ["2", "$2"],
+      ["3", "$3"],
+      ["5", "$5"],
+      ["10", "$10"],
+      ["0", "No limit"],
+    ],
+    String(work.workspace.runBudgetUsd),
+  );
+  budget.addEventListener("change", async () => {
+    update({ workspace: await api().setPreferences({ runBudgetUsd: Number(budget.value) }) });
+  });
+  const fixCi = input("", "", "checkbox");
+  fixCi.checked = work.workspace.fixCi;
+  fixCi.addEventListener("change", async () => {
+    update({ workspace: await api().setPreferences({ fixCi: fixCi.checked }) });
+  });
+  const fixCiLabel = el("label", undefined, "check");
+  fixCiLabel.append(
+    fixCi,
+    ` When a pull request's checks fail, put its agent back on it (${MAX_CI_FIXES} times at most)`,
+  );
   const guide = button("Open the setup guide", () => {
     dialog.close();
     openWelcome();
@@ -156,6 +181,12 @@ function preferencesSection(): HTMLElement {
       agents,
       "More tickets wait their turn. Every agent draws on the same Claude quota, so several at once reach its limit sooner.",
     ),
+    field(
+      "Budget per run",
+      budget,
+      "An agent that reaches it stops and keeps its changes; continuing the run gives it the same budget again.",
+    ),
+    fixCiLabel,
     label,
     hooksCard(),
     guide,

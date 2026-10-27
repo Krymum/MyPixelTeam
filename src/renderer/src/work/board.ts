@@ -1,5 +1,6 @@
 import {
   isActiveRun,
+  MAX_CI_FIXES,
   isPreviewable,
   trackerLabel,
   type Attachment,
@@ -472,12 +473,40 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
         "muted",
       ),
     );
+  const open = (issue.children ?? []).filter((c) => c.statusCategory !== "done");
+  if (open.length && issue.trusted) box.append(epicBox(project.id, issue.key, open.length));
   box.append(
     branchPicker(project.id, issue, trustKey),
     field("Model", model, "Opus only for hard tickets: it uses the Claude quota much faster."),
     start,
     status,
   );
+}
+
+/** Puts agents on an epic's open tickets, one after another. */
+function epicBox(projectId: string, epicKey: string, count: number): HTMLElement {
+  const box = el("div", undefined, "epic-box");
+  const status = el("p", "", "status");
+  const go = button(
+    `Put agents on its ${count} open ticket${count === 1 ? "" : "s"}`,
+    () =>
+      void busy(go, status, async () => {
+        await api().startEpic(projectId, epicKey);
+        tab = "agents";
+        render();
+      }),
+    "primary",
+  );
+  box.append(
+    el(
+      "p",
+      "One after another, in their order in the epic. Each starts from the branch of the one before, so the work it depends on is already there, and reads what the earlier agents did. A ticket that fails stops the rest.",
+      "muted",
+    ),
+    go,
+    status,
+  );
+  return box;
 }
 
 /** Instructions being typed for a continuation, by run id (runs redraw this box). */
@@ -594,7 +623,40 @@ function runSummary(run: RunView): HTMLElement {
   );
   if (run.model) head.append(el("span", run.model, "muted"));
   if (run.costUsd !== undefined) head.append(el("span", `$${run.costUsd.toFixed(2)}`, "muted"));
+  else if (run.tokens)
+    head.append(
+      Object.assign(el("span", `${formatTokens(run.tokens)} tokens, ${run.turns} turns`, "muted"), {
+        title: run.budgetUsd
+          ? `The cost shows when the agent finishes; it stops at $${run.budgetUsd}.`
+          : "The cost shows when the agent finishes.",
+      }),
+    );
+  if (run.ci) head.append(el("span", CI_LABELS[run.ci], `pill ci ${run.ci}`));
   div.append(head);
+  if (run.epicKey || run.ciFixes) {
+    const why = [
+      run.epicKey && `Part of a run through ${run.epicKey}`,
+      run.ciFixes && `Fixing failing checks, attempt ${run.ciFixes} of ${MAX_CI_FIXES}`,
+    ];
+    div.append(el("div", why.filter(Boolean).join(". "), "muted"));
+  }
+  if (run.stoppedOnBudget && latestRun(run) === run) {
+    const more = el("div", undefined, "inline");
+    const status = el("p", "", "status");
+    const go = button(
+      `Continue with another $${run.budgetUsd}`,
+      () =>
+        void busy(go, status, () =>
+          api().continueRun(
+            run.id,
+            "Your budget ran out before you finished. Continue the ticket where you left off.",
+          ),
+        ),
+      "primary",
+    );
+    more.append(go, status);
+    div.append(more);
+  }
   if (run.resumeAt) {
     const resume = el("div", undefined, "inline");
     resume.append(
@@ -614,6 +676,16 @@ function runSummary(run: RunView): HTMLElement {
   const lastLine = run.log.at(-1);
   if (lastLine && isActiveRun(run)) div.append(el("div", lastLine, "muted"));
   return div;
+}
+
+const CI_LABELS = { pending: "Checks running", success: "Checks passed", failure: "Checks failed" };
+
+const formatTokens = (n: number): string =>
+  n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
+
+/** The ticket's most recent run: only it offers to go on. */
+function latestRun(run: RunView): RunView | undefined {
+  return work.runs.find((r) => r.projectId === run.projectId && r.issueKey === run.issueKey);
 }
 
 const clock = (at: number): string =>

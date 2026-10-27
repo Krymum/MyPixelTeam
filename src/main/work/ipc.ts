@@ -186,6 +186,7 @@ export function registerWorkIpc(deps: {
     },
     startRun: async (projectId, key, options) => runner.start(projectId, key, options),
     cancelRun: async (id) => runner.cancel(id),
+    startEpic: (projectId, epicKey) => runner.startEpic(projectId, epicKey),
     agentGuide: (projectId) => hasAgentGuide(workspace.get(projectId)),
     prepareProject: async (projectId) => {
       const key = await guideTicket(tracker(projectId));

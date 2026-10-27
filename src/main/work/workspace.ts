@@ -6,7 +6,14 @@ import { Project, Workspace, type ProjectInput } from "../../shared/work/types";
 
 /** Projects the agents can work on: a Jira project paired with a repository. */
 export class WorkspaceStore {
-  private state: Workspace = { projects: [], onboarded: false, notifications: true, maxAgents: 2 };
+  private state: Workspace = {
+    projects: [],
+    onboarded: false,
+    notifications: true,
+    maxAgents: 2,
+    runBudgetUsd: 3,
+    fixCi: true,
+  };
 
   constructor(
     private readonly path: string,
@@ -69,7 +76,9 @@ export class WorkspaceStore {
 
   /** Preferences stored next to the projects. */
   setPreferences(
-    prefs: Partial<Pick<Workspace, "onboarded" | "notifications" | "maxAgents">>,
+    prefs: Partial<
+      Pick<Workspace, "onboarded" | "notifications" | "maxAgents" | "runBudgetUsd" | "fixCi">
+    >,
   ): Workspace {
     const parsed = Workspace.safeParse({ ...this.state, ...prefs });
     if (!parsed.success) throw new Error(z.prettifyError(parsed.error));

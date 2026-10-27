@@ -141,6 +141,10 @@ export const Workspace = z.object({
   notifications: z.boolean().default(true),
   /** Agents working at the same time; the next tickets wait their turn. */
   maxAgents: z.number().int().min(1).max(MAX_AGENTS).default(2),
+  /** Dollars an agent may spend on one run before it stops and waits for you; 0 for no limit. */
+  runBudgetUsd: z.number().min(0).max(100).default(3),
+  /** When a pull request's checks fail, put its agent back on it with the failure logs. */
+  fixCi: z.boolean().default(true),
 });
 export type Workspace = z.infer<typeof Workspace>;
 
@@ -272,6 +276,9 @@ export interface IssueChanges {
   description?: string;
 }
 
+/** Agents put back on a pull request whose checks fail, before leaving it to you. */
+export const MAX_CI_FIXES = 2;
+
 export type RunStatus =
   "queued" | "preparing" | "running" | "publishing" | "done" | "failed" | "cancelled";
 
@@ -282,7 +289,12 @@ export interface StartRunOptions {
   branch?: string;
   /** Claude model for this run; the project's otherwise. */
   model?: string;
+  /** Start the new branch from this branch on origin instead of the base (an epic's chain). */
+  from?: string;
 }
+
+/** What a pull request's checks say: still running, all green, or something failed. */
+export type CiState = "pending" | "success" | "failure";
 
 /** Where an agent can work on a ticket. */
 export interface TicketBranches {
@@ -373,6 +385,19 @@ export interface RunView {
   model?: string;
   /** Stopped by the Claude usage limit: the agent picks the ticket up again at this time. */
   resumeAt?: number;
+  /** Turns and tokens so far, updated while the agent works. */
+  turns?: number;
+  tokens?: number;
+  /** Dollars the run may spend; none when unlimited. */
+  budgetUsd?: number;
+  /** The agent used its budget before finishing; continuing gives it another. */
+  stoppedOnBudget?: boolean;
+  /** The pull request's checks after this run pushed. */
+  ci?: CiState;
+  /** How many times agents were put back on the pull request for failing checks. */
+  ciFixes?: number;
+  /** Started as one ticket of this epic, run one after another. */
+  epicKey?: string;
 }
 
 export const isActiveRun = (run: RunView): boolean =>

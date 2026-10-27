@@ -7,7 +7,7 @@ import { ticketsInstructions } from "./ticket-drafts";
 export function buildPrompt(
   issue: IssueDetail,
   project: Project,
-  where: { branch: string; base: string; existing: boolean },
+  where: { branch: string; base: string; existing: boolean; earlier?: EarlierTicket[] },
 ): string {
   const lines = [
     `You are working on the ${project.tracker.kind === "jira" ? "Jira ticket" : "GitHub issue"} ${issue.key} (${issue.type}${issue.priority ? `, priority ${issue.priority}` : ""}).`,
@@ -28,6 +28,13 @@ export function buildPrompt(
     lines.push(
       "Do not create them again. An agent works on one ticket at a time, so the work itself is done on those tickets, not here. Unless this epic asks for something of its own that none of them covers, change nothing and end by saying which ticket to start with and why.",
     );
+  }
+  if (where.earlier?.length) {
+    lines.push(
+      "",
+      "Agents already did the earlier tickets of this epic. Their work is in your branch; build on their decisions rather than redoing them:",
+    );
+    for (const e of where.earlier) lines.push(`- ${e.key} ${e.summary}: ${clip(e.result, 1200)}`);
   }
   // Only people trusted with the repository get to talk to the agent.
   const comments = issue.comments.filter((c) => c.trusted).slice(-5);
@@ -62,6 +69,41 @@ export function workingInstructions(): string {
     "Check your change the cheapest way that proves it: type-check, lint and run the tests that cover what you changed. Leave the full test suite, end-to-end runs and starting the whole stack to CI, unless the ticket is about them or nothing else can check it.",
     "Take screenshots only when the ticket changes what people see, and as few as you need: every image costs a lot.",
   ].join("\n");
+}
+
+/** A ticket of the same epic an agent finished before this one, and what it said. */
+export interface EarlierTicket {
+  key: string;
+  summary: string;
+  result: string;
+}
+
+/** A failing check of the pull request, with the end of its log when the service gives it. */
+export interface FailedCheck {
+  name: string;
+  url?: string;
+  summary?: string;
+  log?: string;
+}
+
+/** What an agent put back on its pull request is told about the failing checks. */
+export function ciInstruction(failed: FailedCheck[]): string {
+  const lines = [
+    "The checks of your pull request failed. Fix the cause in the code (not the checks themselves, unless they are wrong), then check it locally the same way before finishing.",
+  ];
+  for (const f of failed) {
+    lines.push(
+      "",
+      `Check "${f.name}"${f.url ? ` (${f.url})` : ""}${f.summary ? `: ${clip(f.summary, 300)}` : ""}`,
+    );
+    if (f.log) lines.push("End of its log:", "```", f.log, "```");
+  }
+  if (!failed.some((f) => f.log))
+    lines.push(
+      "",
+      "The service gives no log: reproduce the failure by running the same steps locally.",
+    );
+  return lines.join("\n");
 }
 
 /** A comment left on the pull request, inline on a file or on the whole change. */
@@ -110,12 +152,16 @@ export interface StreamResult {
   text: string;
   isError: boolean;
   costUsd?: number;
+  /** The agent spent its --max-budget-usd before finishing. */
+  budgetReached?: boolean;
 }
 
 export interface StreamUpdate {
   /** Human-readable progress line. */
   log?: string;
   result?: StreamResult;
+  /** An assistant message's tokens; a message arrives once per content block, same id. */
+  usage?: { id: string; tokens: number };
 }
 
 const clip = (text: string, max = 160): string => {
@@ -128,11 +174,31 @@ interface StreamLine {
   subtype?: string;
   model?: string;
   parent_tool_use_id?: string | null;
-  message?: { content?: { type: string; text?: string; name?: string; input?: unknown }[] };
+  message?: {
+    id?: string;
+    content?: { type: string; text?: string; name?: string; input?: unknown }[];
+    usage?: Record<string, unknown>;
+  };
   result?: string;
   is_error?: boolean;
   total_cost_usd?: number;
   errors?: string[];
+}
+
+/** Tokens read and written by one assistant message, cached context included. */
+function messageUsage(line: StreamLine): StreamUpdate["usage"] {
+  const id = line.message?.id;
+  const usage = line.message?.usage;
+  if (line.type !== "assistant" || !id || !usage) return undefined;
+  const count = (key: string) => (typeof usage[key] === "number" ? (usage[key] as number) : 0);
+  return {
+    id,
+    tokens:
+      count("input_tokens") +
+      count("cache_read_input_tokens") +
+      count("cache_creation_input_tokens") +
+      count("output_tokens"),
+  };
 }
 
 /** One line of `claude -p --output-format stream-json --verbose`. */
@@ -145,20 +211,28 @@ export function readStreamLine(raw: string, cwd?: string): StreamUpdate {
   }
   if (line.type === "system" && line.subtype === "init")
     return { log: `session started${line.model ? ` (${line.model})` : ""}` };
+  const usage = messageUsage(line);
   if (line.type === "assistant" && !line.parent_tool_use_id) {
     const blocks = line.message?.content ?? [];
     const tool = blocks.findLast((b) => b.type === "tool_use" && b.name);
-    if (tool?.name) return { log: `→ ${summarizeTool(tool.name, tool.input, cwd).summary}` };
+    if (tool?.name) return { log: `→ ${summarizeTool(tool.name, tool.input, cwd).summary}`, usage };
     const text = blocks.find((b) => b.type === "text" && b.text?.trim())?.text;
-    return text ? { log: clip(text) } : {};
+    return text ? { log: clip(text), usage } : { usage };
   }
+  // Subagents' messages count too.
+  if (line.type === "assistant") return { usage };
   if (line.type === "result") {
     const isError =
       line.is_error === true || (line.subtype !== undefined && line.subtype !== "success");
     const text = line.result ?? line.errors?.join("\n") ?? line.subtype ?? "";
     return {
       log: isError ? `agent stopped: ${clip(text || "error")}` : "agent finished",
-      result: { text, isError, costUsd: line.total_cost_usd },
+      result: {
+        text,
+        isError,
+        costUsd: line.total_cost_usd,
+        budgetReached: line.subtype === "error_max_budget_usd" || undefined,
+      },
     };
   }
   return {};

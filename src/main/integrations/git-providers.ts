@@ -1,5 +1,5 @@
-import type { GitProviderId, RepoSummary } from "../../shared/work/types";
-import type { ReviewComment } from "../work/agent-protocol";
+import type { CiState, GitProviderId, RepoSummary } from "../../shared/work/types";
+import type { FailedCheck, ReviewComment } from "../work/agent-protocol";
 import { basicAuth, HttpError, jsonClient, type Fetch } from "./http";
 import { isTrustedAuthor } from "./trackers";
 
@@ -16,6 +16,39 @@ export interface GitProvider {
   pullRequest(fullName: string, pr: PullRequestInput): Promise<string>;
   /** Comments left on a pull request, given its web URL, oldest first. */
   reviewComments(fullName: string, pullRequestUrl: string): Promise<ReviewComment[]>;
+  /** The checks reported on a commit; "none" while (or when) the repository runs none. */
+  checks(fullName: string, sha: string): Promise<CiReport>;
+}
+
+export interface CiReport {
+  state: CiState | "none";
+  /** Filled once every check is done. */
+  failed: FailedCheck[];
+}
+
+/** Lines of a failing job's log handed to the agent: the error is nearly always at the end. */
+const LOG_LINES = 120;
+const LOG_CHECKS = 3;
+
+/** All done: failed if any failed. */
+export function ciReport(checks: { state: CiState }[], failed: FailedCheck[]): CiReport {
+  if (!checks.length) return { state: "none", failed: [] };
+  if (checks.some((c) => c.state === "pending")) return { state: "pending", failed: [] };
+  return failed.length ? { state: "failure", failed } : { state: "success", failed: [] };
+}
+
+/** The end of a log, without GitHub's timestamps and ANSI colours. */
+export function logTail(text: string, lines = LOG_LINES): string {
+  return (
+    text
+      // eslint-disable-next-line no-control-regex
+      .replace(/\u001b\[[0-9;]*m/g, "")
+      .split(/\r?\n/)
+      .map((l) => l.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z /, ""))
+      .slice(-lines)
+      .join("\n")
+      .trim()
+  );
 }
 
 /** The pull request number in its web URL (".../pull/12", ".../pull-requests/12"). */
@@ -50,7 +83,7 @@ export class GitHubProvider implements GitProvider {
 
   constructor(
     private readonly token: string,
-    fetchImpl?: Fetch,
+    private readonly fetchImpl: Fetch = fetch,
   ) {
     this.call = jsonClient(
       "https://api.github.com",
@@ -116,6 +149,82 @@ export class GitHubProvider implements GitProvider {
         line: c.line ?? undefined,
         trusted: isTrustedAuthor(c.author_association),
       }));
+  }
+
+  async checks(fullName: string, sha: string): Promise<CiReport> {
+    type Run = {
+      id: number;
+      name: string;
+      status: string;
+      conclusion: string | null;
+      html_url?: string;
+      output?: { summary?: string | null };
+      app?: { slug?: string };
+    };
+    type Status = { context: string; state: string; target_url?: string; description?: string };
+    const [runs, combined] = await Promise.all([
+      this.call<{ check_runs: Run[] }>(
+        "GET",
+        `/repos/${fullName}/commits/${sha}/check-runs?per_page=100`,
+      ),
+      this.call<{ statuses: Status[] }>("GET", `/repos/${fullName}/commits/${sha}/status`),
+    ]);
+    const failedRun = (r: Run) => r.conclusion === "failure" || r.conclusion === "timed_out";
+    const checks = [
+      ...runs.check_runs.map((r) => ({
+        state: (r.status !== "completed"
+          ? "pending"
+          : failedRun(r)
+            ? "failure"
+            : "success") as CiState,
+      })),
+      ...combined.statuses.map((s) => ({
+        state: (s.state === "pending"
+          ? "pending"
+          : s.state === "success"
+            ? "success"
+            : "failure") as CiState,
+      })),
+    ];
+    const failed: FailedCheck[] = [
+      ...(await Promise.all(
+        runs.check_runs.filter(failedRun).map(async (r, i) => ({
+          name: r.name,
+          url: r.html_url,
+          summary: r.output?.summary ?? undefined,
+          // A GitHub Actions check run is a job: its log is one call away.
+          log:
+            r.app?.slug === "github-actions" && i < LOG_CHECKS
+              ? await this.jobLog(fullName, r.id)
+              : undefined,
+        })),
+      )),
+      ...combined.statuses
+        .filter((s) => s.state === "failure" || s.state === "error")
+        .map((s) => ({ name: s.context, url: s.target_url, summary: s.description })),
+    ];
+    return ciReport(checks, failed);
+  }
+
+  /** The end of an Actions job's log; undefined when it can't be read. */
+  private async jobLog(fullName: string, jobId: number): Promise<string | undefined> {
+    try {
+      // Answers with a redirect to the log file; fetch drops the token on the way there.
+      const res = await this.fetchImpl(
+        `https://api.github.com/repos/${fullName}/actions/jobs/${jobId}/logs`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.token.trim()}`,
+            Accept: "application/vnd.github+json",
+            "User-Agent": "MyPixelTeam",
+          },
+          signal: AbortSignal.timeout(20_000),
+        },
+      );
+      return res.ok ? logTail(await res.text()) : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   async pullRequest(fullName: string, pr: PullRequestInput): Promise<string> {
@@ -280,6 +389,22 @@ export class BitbucketProvider implements GitProvider {
         line: c.inline?.to ?? c.inline?.from ?? undefined,
         trusted: repo.private,
       }));
+  }
+
+  /** Bitbucket gives each build's state and link, not its log. */
+  async checks(fullName: string, sha: string): Promise<CiReport> {
+    type Status = { state: string; name?: string; key: string; url?: string; description?: string };
+    const statuses = await this.pages<Status>(
+      `/repositories/${fullName}/commit/${sha}/statuses?pagelen=100`,
+    );
+    const stateOf = (s: Status): CiState =>
+      s.state === "INPROGRESS" ? "pending" : s.state === "SUCCESSFUL" ? "success" : "failure";
+    return ciReport(
+      statuses.map((s) => ({ state: stateOf(s) })),
+      statuses
+        .filter((s) => stateOf(s) === "failure")
+        .map((s) => ({ name: s.name ?? s.key, url: s.url, summary: s.description })),
+    );
   }
 
   gitAuth() {
