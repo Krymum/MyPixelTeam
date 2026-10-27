@@ -9,6 +9,7 @@ import {
   type RunView,
 } from "../../../shared/work/types";
 import { busy, button, el, field, formatDuration, input, link, select, textarea } from "../dom";
+import { questionsBox } from "./questions-ui";
 import { openSettings } from "./settings";
 import { activeProject, connected, subscribe, update, work } from "./store";
 
@@ -52,6 +53,12 @@ export function resetBoard(): void {
   view = { kind: "list" };
   issues = undefined;
   if (!board.hidden) render();
+}
+
+/** Opens the Agents tab, where waiting agents are listed with their questions. */
+export function showAgents(): void {
+  tab = "agents";
+  toggleBoard(true);
 }
 
 /** Opens the ticket an agent works on (agent panel, notification), switching project if needed. */
@@ -385,6 +392,8 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
   box.replaceChildren(el("h4", "Agent"));
   if (active) {
     box.append(runSummary(active));
+    const questions = questionsBox(active);
+    if (questions) box.append(questions);
     const cancel = button(
       "Stop the agent",
       () => void busy(cancel, status, () => api().cancelRun(active.id)),
@@ -583,6 +592,8 @@ function renderAgents(): void {
       const key = button(run.issueKey, () => void showIssue(run.projectId, run.issueKey), "link");
       title.append(key, el("span", run.issueSummary));
       card.append(title, runSummary(run));
+      const questions = questionsBox(run);
+      if (questions) card.append(questions);
       if (run.branch) card.append(el("div", run.branch, "muted"));
       const actions = el("div", undefined, "actions");
       const status = el("p", "", "status");

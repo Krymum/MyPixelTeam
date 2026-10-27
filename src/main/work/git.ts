@@ -29,12 +29,7 @@ export function authEnv(auth?: GitAuth): Record<string, string> {
 }
 
 /** Commits made for the agent when git has no identity configured. */
-const FALLBACK_IDENTITY = [
-  "-c",
-  "user.name=MyPixelTeam",
-  "-c",
-  "user.email=mypixelteam@localhost",
-];
+const FALLBACK_IDENTITY = ["-c", "user.name=MyPixelTeam", "-c", "user.email=mypixelteam@localhost"];
 
 export async function git(
   args: string[],

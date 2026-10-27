@@ -71,6 +71,7 @@ export const WORK_CALLS = [
   "ticketBranches",
   "startRun",
   "cancelRun",
+  "answerQuestion",
 ] as const;
 
 export interface ServerInfo {
@@ -148,6 +149,13 @@ export interface WorkApi {
   /** Puts an agent on the ticket. */
   startRun(projectId: string, issueKey: string, options?: StartRunOptions): Promise<RunView>;
   cancelRun(id: string): Promise<void>;
+  /** Allows or refuses what an agent asked; a refusal's message reaches the agent. */
+  answerQuestion(
+    runId: string,
+    questionId: string,
+    allow: boolean,
+    message?: string,
+  ): Promise<void>;
   onRuns(listener: (runs: RunView[]) => void): () => void;
   onOpenIssue(listener: (projectId: string, issueKey: string) => void): () => void;
 }

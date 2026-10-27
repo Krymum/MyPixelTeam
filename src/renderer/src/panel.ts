@@ -34,6 +34,13 @@ export function renderPanel(
     const ticket = el("dd");
     ticket.append(button(`${run.view.issueKey} · ${run.view.issueSummary}`, run.openIssue, "link"));
     dl.append(el("dt", "ticket"), ticket, el("dt", "run"), el("dd", run.view.status));
+    const waiting = run.view.questions?.[0];
+    if (waiting) {
+      // Answered on the ticket: this panel redraws every second, which would eat typing.
+      const ask = el("dd");
+      ask.append(button(`✋ asks: ${waiting.summary}. Answer…`, run.openIssue, "link"));
+      dl.append(el("dt", "waiting"), ask);
+    }
     if (run.view.pullRequestUrl) {
       const dd = el("dd");
       dd.append(link("pull request", run.view.pullRequestUrl));

@@ -655,3 +655,29 @@ code {
   max-height: none;
   cursor: zoom-out;
 }
+
+button.waiting {
+  background: #6b5a1b;
+  border-color: #f2c94c;
+  color: #ffe9a8;
+  animation: waiting-blink 1.2s steps(2, start) infinite;
+}
+
+@keyframes waiting-blink {
+  to {
+    border-color: #6b5a1b;
+  }
+}
+
+.questions {
+  display: grid;
+  gap: 8px;
+}
+
+.question {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-left: 3px solid #f2c94c;
+  background: #33301e;
+}

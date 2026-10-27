@@ -75,7 +75,7 @@ function publish(raw: OfficeEvent): void {
   history.push(event);
   if (history.length > HISTORY_LIMIT) history.splice(0, history.length - HISTORY_LIMIT);
   win?.webContents.send(IPC.event, event);
-  notifier?.event(event);
+  notifier?.event(event, run);
 }
 
 function createWindow(): void {
@@ -199,6 +199,21 @@ function startWork(): void {
     historyPath: join(data, "runs.json"),
     onChange: (runs) => win?.webContents.send(IPC.runs, runs),
     onFinished: (run) => notifier?.run(run),
+    // The character raises its hand while a question waits, and goes back to work after.
+    onQuestion: (run, question) => {
+      const waiting = question ?? run.questions?.[0];
+      publish({
+        v: 1,
+        type: waiting ? "agent.waiting" : "agent.thinking",
+        source: "claude-code",
+        sessionId: run.sessionId,
+        agentId: run.sessionId,
+        agentName: run.issueKey,
+        cwd: run.worktree,
+        timestamp: new Date().toISOString(),
+        detail: waiting ? { message: `Allow ${waiting.summary}?` } : {},
+      });
+    },
     // The character walks in right away; transcripts (or hooks) then show its work.
     onSession: (run, phase) =>
       publish({
