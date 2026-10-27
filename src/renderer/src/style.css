@@ -1,16 +1,52 @@
+@import "@fontsource/atkinson-hyperlegible-next/400.css";
+@import "@fontsource/atkinson-hyperlegible-next/600.css";
+@import "@fontsource/atkinson-hyperlegible-mono/400.css";
+@import "@fontsource/pixelify-sans/500.css";
+@import "@fontsource/pixelify-sans/600.css";
+
+/*
+ * The chrome is the same building as the office: plum walls at night, the blue of the
+ * monitors for what you can act on, and three desk lamps for the agents' states.
+ * The pixel face is kept for names (the brand, headings); everything read is in Atkinson.
+ */
 :root {
-  --bg: #1b1b24;
-  --panel: #262633;
-  --line: #3a3a4d;
-  --text: #e8e6f0;
-  --muted: #9a97ad;
-  --ok: #6fcf7f;
-  --bad: #ef6b6b;
+  --bg: #1c1721;
+  --sunken: #17131b;
+  --surface: #262030;
+  --raised: #30283a;
+  --hover: #3a3145;
+  --line: #43394f;
+  --line-soft: #352c40;
+  --text: #eee8f3;
+  --muted: #a89eb6;
+  --accent: #8fd3f4;
+  --accent-ink: #10232d;
+  --ok: #7cc68f;
+  --wait: #f2c14e;
+  --bad: #e7766b;
+
+  --font: "Atkinson Hyperlegible Next", "Segoe UI", system-ui, sans-serif;
+  --mono: "Atkinson Hyperlegible Mono", "Cascadia Mono", Consolas, monospace;
+  --pixel: "Pixelify Sans", var(--font);
+
+  --r-control: 6px;
+  --r-card: 8px;
+  --r-dialog: 12px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  /* Lamps are tinted, never filled: the text stays the brightest thing. */
+  --tint-accent: color-mix(in srgb, var(--accent) 16%, transparent);
+  --tint-ok: color-mix(in srgb, var(--ok) 16%, transparent);
+  --tint-wait: color-mix(in srgb, var(--wait) 16%, transparent);
+  --tint-bad: color-mix(in srgb, var(--bad) 16%, transparent);
+
   color-scheme: dark;
-  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-  font-size: 13px;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
   color: var(--text);
   background: var(--bg);
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -30,18 +66,98 @@ body {
   overflow: hidden;
 }
 
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+h2 {
+  font-family: var(--pixel);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+}
+
+h3 {
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+h4 {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+/* ---- Top bar ---- */
+
 #topbar {
   display: flex;
-  gap: 24px;
+  gap: 16px;
   align-items: center;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  height: 52px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface);
 }
 
 .brand {
-  font-weight: bold;
-  letter-spacing: 0.05em;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-family: var(--pixel);
+  font-weight: 600;
+  font-size: 18px;
+  white-space: nowrap;
+}
+
+.brand svg {
+  width: 28px;
+  height: 28px;
+  shape-rendering: crispEdges;
+}
+
+.work-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.work-controls #project-select {
+  max-width: 260px;
+  margin-right: 8px;
+}
+
+#server-status,
+#agent-count {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* A lamp: a dot in the state's color before the words. */
+.lamp::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 2px;
+  background: currentColor;
+  vertical-align: 0.05em;
 }
 
 .ok {
@@ -52,13 +168,19 @@ body {
   color: var(--bad);
 }
 
-.badge {
-  margin-left: 8px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: #5a4bb5;
-  color: white;
+.wait {
+  color: var(--wait);
 }
+
+.badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--tint-accent);
+  color: var(--accent);
+  font-size: 12px;
+}
+
+/* ---- The office and the side panels ---- */
 
 main {
   flex: 1;
@@ -72,6 +194,7 @@ main {
   display: grid;
   place-items: center;
   min-width: 0;
+  background: var(--sunken);
 }
 
 #office {
@@ -85,24 +208,25 @@ main {
   top: 0;
   right: 0;
   bottom: 0;
-  box-shadow: -8px 0 24px #00000066;
-  width: 340px;
-  padding: 16px;
-  border-left: 1px solid var(--line);
-  background: var(--panel);
+  width: 360px;
+  padding: 20px;
+  border-left: 1px solid var(--line-soft);
+  background: var(--surface);
+  box-shadow: -16px 0 32px #0d0a1066;
   overflow-y: auto;
+  animation: slide-left 180ms var(--ease);
 }
 
 #panel h2 {
-  margin: 0 0 12px;
-  font-size: 16px;
+  margin: 0 0 16px;
+  font-size: 20px;
 }
 
 #panel dl {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 12px;
-  margin: 0 0 16px;
+  gap: 6px 16px;
+  margin: 0 0 20px;
 }
 
 #panel dt {
@@ -121,26 +245,97 @@ main {
 }
 
 #panel li {
-  padding: 4px 0;
-  border-top: 1px solid var(--line);
+  padding: 6px 0;
+  border-top: 1px solid var(--line-soft);
   overflow-wrap: anywhere;
 }
 
 #panel time {
   color: var(--muted);
   margin-right: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
 }
 
-#panel .close {
-  float: right;
-  background: none;
+/* A column beside the office: opening it shrinks the office instead of hiding part of it. */
+#board {
+  position: relative;
+  order: -1;
+  flex: 0 0 440px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line-soft);
+  background: var(--surface);
+  animation: slide-right 180ms var(--ease);
+}
+
+#board .close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+}
+
+#board .tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 56px 0 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+#board .tabs button {
+  padding: 8px 10px 10px;
   border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
   color: var(--muted);
-  font: inherit;
-  cursor: pointer;
 }
 
-/* ---- Work: top bar controls, ticket board, settings ---- */
+#board .tabs button:hover {
+  color: var(--text);
+  background: none;
+}
+
+#board .tabs button.selected {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.board-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 16px 32px;
+}
+
+.board-body h3 {
+  margin: 4px 0 12px;
+  font-size: 16px;
+}
+
+.board-body h4 {
+  margin: 0 0 8px;
+}
+
+.board-body > * + * {
+  margin-top: 12px;
+}
+
+@keyframes slide-right {
+  from {
+    transform: translateX(-16px);
+    opacity: 0;
+  }
+}
+
+@keyframes slide-left {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+}
+
+/* ---- Controls ---- */
 
 button,
 input,
@@ -148,53 +343,117 @@ select,
 textarea {
   font: inherit;
   color: var(--text);
-  background: var(--bg);
+  background: var(--sunken);
   border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 4px 8px;
+  border-radius: var(--r-control);
+  padding: 6px 10px;
+  transition:
+    background-color 120ms,
+    border-color 120ms,
+    color 120ms;
+}
+
+input,
+select,
+textarea {
+  min-height: 34px;
+}
+
+input:hover:not(:disabled, [readonly]),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled, [readonly]) {
+  border-color: var(--muted);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
 }
 
 button {
   cursor: pointer;
-  background: #33334a;
+  background: var(--raised);
+  border-color: var(--line);
+  min-height: 34px;
+  white-space: nowrap;
 }
 
 button:hover:not(:disabled) {
-  border-color: var(--muted);
+  background: var(--hover);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
 }
 
 button.primary {
-  background: #5a4bb5;
-  border-color: #6f5fd0;
-  color: white;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 85%, white);
 }
 
 button.danger {
-  background: #6b2b33;
-  border-color: #8a3a44;
+  background: transparent;
+  border-color: color-mix(in srgb, var(--bad) 55%, transparent);
+  color: var(--bad);
+}
+
+button.danger:hover:not(:disabled) {
+  background: var(--tint-bad);
 }
 
 button.link {
+  min-height: 0;
   background: none;
   border: none;
   padding: 0;
-  color: #a99cff;
+  color: var(--accent);
   text-align: left;
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
+}
+
+button.link:hover:not(:disabled) {
+  background: none;
+  text-decoration-color: var(--accent);
 }
 
 a {
-  color: #a99cff;
+  color: var(--accent);
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  text-decoration-color: var(--accent);
 }
 
 input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
   padding: 0;
   margin: 0;
+  accent-color: var(--accent);
 }
 
 textarea {
@@ -205,12 +464,6 @@ textarea {
 input[readonly],
 textarea[readonly] {
   color: var(--muted);
-}
-
-.work-controls {
-  display: flex;
-  gap: 8px;
-  align-items: center;
 }
 
 .muted {
@@ -228,67 +481,19 @@ textarea[readonly] {
 
 .close {
   float: right;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   background: none;
   border: none;
+  border-radius: var(--r-control);
   color: var(--muted);
   cursor: pointer;
 }
 
-/* Overlays the office on the left, like the agent panel on the right. */
-/* A column beside the office: opening it shrinks the office instead of hiding part of it. */
-#board {
-  position: relative;
-  order: -1;
-  flex: 0 0 420px;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--line);
-  background: var(--panel);
-}
-
-#board .close {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-}
-
-#board .tabs {
-  display: flex;
-  gap: 4px;
-  padding: 10px 16px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-#board .tabs button {
-  border-bottom: none;
-  border-radius: 3px 3px 0 0;
-  background: none;
-  color: var(--muted);
-}
-
-#board .tabs button.selected {
-  background: var(--bg);
+.close:hover:not(:disabled) {
   color: var(--text);
-}
-
-.board-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px 16px 24px;
-}
-
-.board-body h3 {
-  margin: 4px 0 10px;
-  font-size: 14px;
-}
-
-.board-body h4 {
-  margin: 0 0 8px;
-}
-
-.board-body > * + * {
-  margin-top: 10px;
+  background: var(--raised);
 }
 
 .toolbar {
@@ -304,79 +509,136 @@ textarea[readonly] {
 
 .check {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
   white-space: nowrap;
+  cursor: pointer;
 }
 
+/* ---- Tickets ---- */
+
 ul.issues {
+  display: grid;
+  gap: 2px;
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
 ul.issues li {
-  padding: 8px;
-  border-top: 1px solid var(--line);
-  cursor: pointer;
   display: grid;
-  gap: 3px;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--r-card);
+  cursor: pointer;
+  transition: background-color 120ms;
 }
 
 ul.issues li:hover,
-ul.issues li:focus {
-  background: #2f2f40;
-  outline: none;
+ul.issues li:focus-visible {
+  background: var(--raised);
+}
+
+ul.issues li.muted {
+  cursor: default;
+  background: none;
 }
 
 .issue-head {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px 10px;
   align-items: center;
+  font-size: 13px;
+}
+
+.key {
+  font-family: var(--mono);
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.issue-title {
+  font-size: 15px;
+}
+
+h3.with-source {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+h3 .source {
+  font-family: var(--font);
+  font-weight: 400;
+  font-size: 13px;
+  letter-spacing: 0;
+  color: var(--muted);
 }
 
 .pill,
 .run-status {
-  padding: 0 6px;
-  border-radius: 3px;
-  font-size: 11px;
-  text-transform: uppercase;
-  background: #44445a;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--raised);
+  color: var(--muted);
+}
+
+.pill::before,
+.run-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: currentColor;
 }
 
 .pill.indeterminate,
 .run-status.running,
 .run-status.preparing,
 .run-status.publishing {
-  background: #2f5e9e;
+  background: var(--tint-accent);
+  color: var(--accent);
 }
 
 .pill.done,
 .run-status.done {
-  background: #2f7a45;
+  background: var(--tint-ok);
+  color: var(--ok);
+}
+
+.run-status.queued {
+  background: var(--tint-wait);
+  color: var(--wait);
 }
 
 .run-status.failed {
-  background: #8a3a44;
+  background: var(--tint-bad);
+  color: var(--bad);
 }
 
 .agent-tag {
   color: var(--ok);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .field {
   display: grid;
-  gap: 4px;
+  gap: 6px;
 }
 
 .field > span {
   color: var(--muted);
+  font-size: 13px;
 }
 
 .field small {
   color: var(--muted);
+  font-size: 12px;
 }
 
 .inline,
@@ -392,21 +654,47 @@ ul.issues li:focus {
   min-width: 0;
 }
 
+.usage {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 2px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
 .card {
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: #22222e;
   display: grid;
   gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-card);
+  background: var(--bg);
 }
 
 .card + .card {
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .card h4 {
   margin: 0;
+}
+
+.card .actions button:not(.primary) {
+  min-height: 28px;
+  padding: 3px 10px;
+  font-size: 13px;
+}
+
+/* One line: the full name is in the tooltip. */
+.branch {
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card.row {
@@ -415,8 +703,10 @@ ul.issues li:focus {
   align-items: center;
 }
 
+/* The agent on a ticket sits at a lit desk. */
 .agent-box {
-  border-color: #5a4bb5;
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .run-summary {
@@ -426,11 +716,14 @@ ul.issues li:focus {
 
 pre.log {
   margin: 0;
-  max-height: 300px;
+  max-height: 320px;
   overflow: auto;
-  padding: 8px;
-  background: var(--bg);
-  font-size: 11px;
+  padding: 10px 12px;
+  border-radius: var(--r-control);
+  background: var(--sunken);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
   white-space: pre-wrap;
 }
 
@@ -441,49 +734,66 @@ ol.comments {
 }
 
 ol.comments li {
-  padding: 6px 0;
-  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-soft);
 }
 
 .empty {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   justify-items: start;
 }
 
+/* ---- Dialogs ---- */
+
 #settings,
 #welcome {
-  width: min(640px, calc(100vw - 32px));
+  width: min(680px, calc(100vw - 32px));
   max-height: calc(100vh - 64px);
-  padding: 20px 24px;
+  padding: 24px 28px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
+  border-radius: var(--r-dialog);
+  background: var(--surface);
   color: var(--text);
+  box-shadow: 0 24px 64px #0d0a1099;
+}
+
+#settings[open],
+#welcome[open] {
+  animation: rise 200ms var(--ease);
 }
 
 #settings::backdrop,
 #welcome::backdrop {
-  background: #00000088;
+  background: #0d0a10b3;
+}
+
+@keyframes rise {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
 }
 
 #settings h2,
 #welcome h2 {
   margin: 0 0 8px;
-  font-size: 16px;
+  font-size: 22px;
 }
 
 #settings section,
 #welcome section {
   display: grid;
-  gap: 10px;
-  margin-top: 16px;
+  gap: 12px;
+  margin-top: 24px;
 }
 
 #settings h3,
 #welcome h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 #settings p,
@@ -491,36 +801,28 @@ ol.comments li {
   margin: 0;
 }
 
-button.warning {
-  background: #6b4a1b;
-  border-color: #a8742a;
-  color: #ffd99a;
-  max-width: 420px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 code {
-  padding: 0 4px;
-  border-radius: 3px;
-  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--sunken);
+  font-family: var(--mono);
+  font-size: 0.92em;
 }
 
 #welcome .steps {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 16px;
+  gap: 4px 20px;
   list-style: none;
-  margin: 8px 0 0;
-  padding: 0 0 10px;
-  border-bottom: 1px solid var(--line);
+  margin: 12px 0 0;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--line-soft);
   color: var(--muted);
 }
 
 #welcome .steps .current {
   color: var(--text);
-  font-weight: bold;
+  font-weight: 600;
 }
 
 #welcome .steps .done {
@@ -528,9 +830,11 @@ code {
 }
 
 #welcome > .link {
-  margin-top: 16px;
+  margin-top: 20px;
   color: var(--muted);
 }
+
+/* ---- Checks, discovery, accounts ---- */
 
 .checks {
   display: grid;
@@ -540,13 +844,14 @@ code {
 .check-row {
   display: grid;
   gap: 4px;
-  padding: 8px 10px;
-  border-left: 3px solid var(--ok);
-  background: #22222e;
+  padding: 10px 12px;
+  border-radius: var(--r-control);
+  box-shadow: inset 3px 0 0 var(--ok);
+  background: var(--bg);
 }
 
 .check-row.bad {
-  border-left-color: var(--bad);
+  box-shadow: inset 3px 0 0 var(--bad);
   color: var(--text);
 }
 
@@ -570,7 +875,7 @@ code {
 }
 
 .card.discovered.unusable {
-  opacity: 0.65;
+  opacity: 0.6;
 }
 
 .card + .card.discovered {
@@ -579,7 +884,7 @@ code {
 
 .account-form {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .card > button {
@@ -589,9 +894,10 @@ code {
 .trust-warning {
   display: grid;
   gap: 6px;
-  padding: 8px 10px;
-  border-left: 3px solid #e0a43a;
-  background: #3a2e1a;
+  padding: 10px 12px;
+  border-radius: var(--r-control);
+  box-shadow: inset 3px 0 0 var(--wait);
+  background: var(--tint-wait);
 }
 
 .trust-warning p {
@@ -601,16 +907,17 @@ code {
 .quick-login,
 .device-code {
   display: grid;
-  gap: 6px;
+  gap: 8px;
   justify-items: start;
 }
 
 .device-code .code {
-  font-size: 22px;
+  font-family: var(--mono);
+  font-size: 24px;
   letter-spacing: 0.15em;
-  padding: 4px 10px;
+  padding: 6px 14px;
   border: 1px dashed var(--muted);
-  border-radius: 4px;
+  border-radius: var(--r-control);
 }
 
 .discovery > h4 {
@@ -636,10 +943,10 @@ code {
 
 .attachment {
   display: grid;
-  gap: 6px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-card);
 }
 
 .attachment img.preview {
@@ -647,6 +954,7 @@ code {
   max-height: 180px;
   object-fit: contain;
   justify-self: start;
+  border-radius: 4px;
   cursor: zoom-in;
   background: #ffffff10;
 }
@@ -656,16 +964,29 @@ code {
   cursor: zoom-out;
 }
 
+/* ---- Agents asking for you ---- */
+
+button.warning {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: var(--tint-wait);
+  border-color: color-mix(in srgb, var(--wait) 50%, transparent);
+  color: var(--wait);
+}
+
+/* The one thing in the room that blinks: an agent is waiting for you. */
 button.waiting {
-  background: #6b5a1b;
-  border-color: #f2c94c;
-  color: #ffe9a8;
+  background: var(--tint-wait);
+  border-color: var(--wait);
+  color: var(--wait);
+  font-weight: 600;
   animation: waiting-blink 1.2s steps(2, start) infinite;
 }
 
 @keyframes waiting-blink {
   to {
-    border-color: #6b5a1b;
+    border-color: transparent;
   }
 }
 
@@ -676,15 +997,25 @@ button.waiting {
 
 .question {
   display: grid;
-  gap: 6px;
-  padding: 8px 10px;
-  border-left: 3px solid #f2c94c;
-  background: #33301e;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--r-control);
+  box-shadow: inset 3px 0 0 var(--wait);
+  background: var(--tint-wait);
 }
 
 .continue-box {
   display: grid;
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--line);
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  dialog[open] {
+    animation: none !important;
+    transition: none !important;
+  }
 }

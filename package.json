@@ -13,6 +13,7 @@
     "dev": "electron-vite dev",
     "demo": "electron-vite dev -- --demo",
     "setup:claude": "node scripts/setup.mjs claude",
+    "icon": "tsx scripts/make-icon.ts",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "dist": "electron-vite build && electron-builder --win portable",
@@ -28,6 +29,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
+    "@fontsource/atkinson-hyperlegible-mono": "^5.3.0",
+    "@fontsource/atkinson-hyperlegible-next": "^5.3.0",
+    "@fontsource/pixelify-sans": "^5.3.0",
     "@types/node": "^24.0.0",
     "electron": "^45.0.0",
     "electron-builder": "~26.17.0",
@@ -51,11 +55,13 @@
     "files": [
       "out/**",
       "adapters/**",
+      "resources/**",
       "office.config.json",
       "package.json"
     ],
     "win": {
       "target": "portable",
+      "icon": "build/icon.ico",
       "artifactName": "MyPixelTeam.exe"
     },
     "asarUnpack": [

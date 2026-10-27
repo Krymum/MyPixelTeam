@@ -9,6 +9,7 @@ import {
   type RunView,
 } from "../../../shared/work/types";
 import { busy, button, el, field, formatDuration, input, link, select, textarea } from "../dom";
+import { modelSelect } from "./model-ui";
 import { questionsBox } from "./questions-ui";
 import { openSettings } from "./settings";
 import { activeProject, connected, subscribe, update, work } from "./store";
@@ -33,6 +34,8 @@ const confirmedUntrusted = new Set<string>();
 const branchLookups = new Map<string, Promise<TicketBranches>>();
 /** Branch picked for the next run ("" = the app's new branch), by "<project>:<key>". */
 const chosenBranch = new Map<string, string>();
+/** Model picked for the next run, by "<project>:<key>". */
+const chosenModel = new Map<string, string>();
 
 export function initBoard(node: HTMLElement): void {
   board = node;
@@ -130,7 +133,7 @@ function renderList(): void {
   const done = input("", "", "checkbox");
   done.checked = query.includeDone;
   const doneLabel = el("label", undefined, "check");
-  doneLabel.append(done, " done too");
+  doneLabel.append(done, " Show done");
   const list = el("ul", undefined, "issues");
 
   const load = () =>
@@ -154,9 +157,9 @@ function renderList(): void {
   toolbar.append(
     search,
     doneLabel,
-    button("↻", load),
+    Object.assign(button("↻", load), { title: "Reload the tickets" }),
     button(
-      "+ New",
+      "New ticket",
       () => {
         view = { kind: "create" };
         render();
@@ -165,7 +168,7 @@ function renderList(): void {
     ),
   );
   body().replaceChildren(
-    el("h3", `${project.name} · ${trackerLabel(project.tracker)}`),
+    heading(project.name, trackerLabel(project.tracker)),
     toolbar,
     status,
     list,
@@ -174,18 +177,25 @@ function renderList(): void {
   else load();
 }
 
+/** The project's name, with where its tickets come from beside it. */
+function heading(name: string, source: string): HTMLElement {
+  const h = el("h3", name, "with-source");
+  h.append(el("span", source, "source"));
+  return h;
+}
+
 function issueRow(issue: IssueSummary): HTMLElement {
   const li = el("li");
   li.tabIndex = 0;
   const run = runsOf(issue.key).find(isActiveRun);
   const head = el("div", undefined, "issue-head");
   head.append(
-    el("strong", issue.key),
+    el("strong", issue.key, "key"),
     pill(issue.status, issue.statusCategory),
     el("span", issue.type, "muted"),
   );
-  if (run) head.append(el("span", "● agent", "agent-tag"));
-  li.append(head, el("div", issue.summary));
+  if (run) head.append(el("span", "Agent on it", "agent-tag lamp"));
+  li.append(head, el("div", issue.summary, "issue-title"));
   if (issue.assignee) li.append(el("div", issue.assignee, "muted"));
   const open = () => {
     view = { kind: "issue", key: issue.key };
@@ -406,6 +416,8 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
   const project = activeProject()!;
   if (last?.agentStarted && last.branch) box.append(continueBox(last));
   const trustKey = `${project.id}:${issue.key}`;
+  const model = modelSelect(chosenModel.get(trustKey) ?? project.agent.model);
+  model.addEventListener("change", () => chosenModel.set(trustKey, model.value));
   const start = button(
     last ? "▶ Put an agent on it again" : "▶ Put an agent on it",
     () =>
@@ -413,6 +425,7 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
         await api().startRun(project.id, issue.key, {
           allowUntrusted: confirmedUntrusted.has(trustKey),
           branch: chosenBranch.get(trustKey) || undefined,
+          model: model.value,
         });
       }),
     "primary",
@@ -454,7 +467,12 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
         "muted",
       ),
     );
-  box.append(branchPicker(project.id, issue, trustKey), start, status);
+  box.append(
+    branchPicker(project.id, issue, trustKey),
+    field("Model", model, "Opus only for hard tickets: it uses the Claude quota much faster."),
+    start,
+    status,
+  );
 }
 
 /** Instructions being typed for a continuation, by run id (runs redraw this box). */
@@ -566,11 +584,24 @@ function runSummary(run: RunView): HTMLElement {
   const div = el("div", undefined, "run-summary");
   const head = el("div", undefined, "issue-head");
   head.append(
-    el("span", run.status, `run-status ${run.status}`),
+    el("span", run.status[0]!.toUpperCase() + run.status.slice(1), `run-status ${run.status}`),
     el("span", formatDuration((run.endedAt ?? Date.now()) - run.startedAt), "muted"),
   );
+  if (run.model) head.append(el("span", run.model, "muted"));
   if (run.costUsd !== undefined) head.append(el("span", `$${run.costUsd.toFixed(2)}`, "muted"));
   div.append(head);
+  if (run.resumeAt) {
+    const resume = el("div", undefined, "inline");
+    resume.append(
+      el(
+        "span",
+        `Picks the ticket up again at ${clock(run.resumeAt)}, when the usage limit resets.`,
+        "wait",
+      ),
+      button("Don't", () => void api().cancelRun(run.id)),
+    );
+    div.append(resume);
+  }
   if (run.continuedFrom)
     div.append(el("div", `↳ continued: ${run.instruction ?? "the review comments"}`, "muted pre"));
   if (run.pullRequestUrl) div.append(link("Pull request", run.pullRequestUrl));
@@ -578,6 +609,32 @@ function runSummary(run: RunView): HTMLElement {
   const lastLine = run.log.at(-1);
   if (lastLine && isActiveRun(run)) div.append(el("div", lastLine, "muted"));
   return div;
+}
+
+const clock = (at: number): string =>
+  new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/** What today's runs cost, and how many agents may work at once. */
+function usageLine(): HTMLElement {
+  const midnight = new Date().setHours(0, 0, 0, 0);
+  const today = work.runs.filter((r) => r.startedAt >= midnight);
+  const cost = today.reduce((sum, r) => sum + (r.costUsd ?? 0), 0);
+  const queued = work.runs.filter((r) => r.status === "queued").length;
+  const line = el("div", undefined, "usage");
+  line.append(
+    el(
+      "span",
+      `Today: $${cost.toFixed(2)} over ${today.length} run${today.length === 1 ? "" : "s"}`,
+    ),
+    el(
+      "span",
+      `${work.workspace.maxAgents} at once${queued ? `, ${queued} waiting` : ""}`,
+      "muted",
+    ),
+  );
+  line.title =
+    "API-equivalent cost reported by Claude Code. On a subscription it is the share of your quota.";
+  return line;
 }
 
 function renderCreate(): void {
@@ -639,6 +696,7 @@ function renderAgents(): void {
     return;
   }
   container.replaceChildren(
+    usageLine(),
     ...work.runs.map((run) => {
       const card = el("div", undefined, "card");
       const title = el("div", undefined, "issue-head");
@@ -647,7 +705,8 @@ function renderAgents(): void {
       card.append(title, runSummary(run));
       const questions = questionsBox(run);
       if (questions) card.append(questions);
-      if (run.branch) card.append(el("div", run.branch, "muted"));
+      if (run.branch)
+        card.append(Object.assign(el("div", run.branch, "muted branch"), { title: run.branch }));
       const actions = el("div", undefined, "actions");
       const status = el("p", "", "status");
       if (isActiveRun(run)) {

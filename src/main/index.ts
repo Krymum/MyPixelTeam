@@ -85,7 +85,13 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 600,
     title: "MyPixelTeam",
-    backgroundColor: "#1b1b24",
+    // Windows' taskbar takes its sizes from the .ico; elsewhere the PNG.
+    icon: join(
+      app.getAppPath(),
+      "resources",
+      process.platform === "win32" ? "icon.ico" : "icon.png",
+    ),
+    backgroundColor: "#1c1721",
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
@@ -152,7 +158,9 @@ async function startServer(): Promise<void> {
 }
 
 // Windows shows notifications under this name.
-if (process.platform === "win32") app.setAppUserModelId("MyPixelTeam");
+// The packaged app's id, so the taskbar groups and labels the window as MyPixelTeam
+// rather than as Electron.
+if (process.platform === "win32") app.setAppUserModelId("com.mypixelteam.app");
 
 // A second launch would fail to bind the port: focus the running window instead.
 if (!app.requestSingleInstanceLock()) app.quit();

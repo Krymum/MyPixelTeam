@@ -116,7 +116,12 @@ export function registerWorkIpc(deps: {
       });
       return found;
     },
-    setPreferences: async (prefs) => workspace.setPreferences(prefs),
+    setPreferences: async (prefs) => {
+      const view = workspace.setPreferences(prefs);
+      // More agents allowed: queued tickets can start now.
+      runner.drain();
+      return view;
+    },
     accounts: async () => accounts.view(),
     connect: (input) => accounts.connect(input),
     disconnect: async (provider) => accounts.disconnect(provider),

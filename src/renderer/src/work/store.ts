@@ -21,7 +21,7 @@ const listeners = new Set<Listener>();
 
 export const work: WorkState = {
   accounts: { accounts: [], secureStorage: true },
-  workspace: { projects: [], onboarded: false, notifications: true },
+  workspace: { projects: [], onboarded: false, notifications: true, maxAgents: 2 },
   runs: [],
 };
 

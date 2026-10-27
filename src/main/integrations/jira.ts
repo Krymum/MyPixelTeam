@@ -48,6 +48,7 @@ interface RawIssue {
     description?: unknown;
     comment?: { comments: RawComment[] };
     attachment?: RawAttachment[];
+    parent?: RawIssue;
   };
 }
 
@@ -155,17 +156,29 @@ export class JiraClient {
   async issue(key: string): Promise<IssueDetail> {
     const k = encodeURIComponent(key);
     const projectKey = key.replace(/-\d+$/, "");
-    const [raw, transitions, permissions] = await Promise.all([
+    const children = new URLSearchParams({
+      jql: `parent = "${key}" ORDER BY created ASC`,
+      fields: SUMMARY_FIELDS.join(","),
+      maxResults: "100",
+    });
+    const [raw, transitions, permissions, childIssues] = await Promise.all([
       this.call<RawIssue>(
         "GET",
-        `/issue/${k}?fields=${[...SUMMARY_FIELDS, "description", "comment", "attachment"].join(",")}`,
+        `/issue/${k}?fields=${[...SUMMARY_FIELDS, "description", "comment", "attachment", "parent"].join(",")}`,
       ),
       this.transitions(key),
       this.permissions(projectKey),
+      // Not every Jira answers `parent =`: then the ticket just shows no children.
+      this.call<{ issues: RawIssue[] }>("GET", `/search/jql?${children}`).then(
+        (r) => r.issues,
+        () => [],
+      ),
     ]);
     const comments = raw.fields.comment?.comments ?? [];
     return {
       ...this.summary(raw),
+      parent: raw.fields.parent ? this.summary(raw.fields.parent) : undefined,
+      children: childIssues.map((i) => this.summary(i)),
       description: adfToText(raw.fields.description),
       transitions: transitions.map(({ id, name, to }) => ({ id, name, to })),
       attachments: (raw.fields.attachment ?? []).map((a) => ({
@@ -238,6 +251,7 @@ export class JiraClient {
       summary: issue.summary.trim(),
     };
     if (issue.description?.trim()) fields.description = textToAdf(issue.description);
+    if (issue.parentKey) fields.parent = { key: issue.parentKey };
     const res = await this.call<{ key: string }>("POST", "/issue", { fields });
     return res.key;
   }

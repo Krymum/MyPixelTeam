@@ -60,6 +60,21 @@ describe("buildPrompt", () => {
     expect(prompt).toMatch(/Project instructions:\nRun npm test\.$/);
   });
 
+  it("shows an epic's existing tickets so they aren't created again", () => {
+    const child = { ...issue, key: "PROJ-8", summary: "Dark tokens", status: "To Do" };
+    const where = { branch: "b", base: "main", existing: false };
+    const epic = buildPrompt({ ...issue, children: [child] }, project, where);
+    expect(epic).toContain(
+      "This ticket is an epic. Its tickets already exist:\n- PROJ-8 Dark tokens (To Do)",
+    );
+    expect(epic).toContain("Do not create them again.");
+    const part = buildPrompt({ ...child, parent: issue }, project, where);
+    expect(part).toContain("belongs to the epic PROJ-7 (Add dark mode)");
+    expect(buildPrompt(issue, project, where)).not.toMatch(
+      /This ticket is an epic|belongs to the epic/,
+    );
+  });
+
   it("tells the agent to build on an existing branch", () => {
     const prompt = buildPrompt(issue, project, {
       branch: "feature/PROJ-7",

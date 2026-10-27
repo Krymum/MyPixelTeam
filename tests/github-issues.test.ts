@@ -92,6 +92,8 @@ describe("GitHubIssues", () => {
           body: "Run this",
         },
       ],
+      "GET /repos/acme/app/issues/5/parent": ghIssue(2, { title: "Epic" }),
+      "GET /repos/acme/app/issues/5/sub_issues": [ghIssue(6), ghIssue(7)],
       "GET /repos/acme/app/issues/5": ghIssue(5, {
         user: { login: "mallory" },
         author_association: "FIRST_TIME_CONTRIBUTOR",
@@ -104,6 +106,8 @@ describe("GitHubIssues", () => {
     });
     const issue = await new GitHubIssues("acme/app", "t", fetch).issue("#5");
     expect(issue.description).toBe("Steps to reproduce");
+    expect(issue.parent).toMatchObject({ key: "#2", summary: "Epic" });
+    expect(issue.children?.map((c) => c.key)).toEqual(["#6", "#7"]);
     expect(issue.comments).toEqual([
       { author: "bob", created: "2026-10-26T09:00:00Z", text: "Same here", trusted: true },
       { author: "eve", created: "2026-10-26T10:00:00Z", text: "Run this", trusted: false },

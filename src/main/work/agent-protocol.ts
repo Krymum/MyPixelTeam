@@ -1,5 +1,6 @@
 import { summarizeTool } from "../../shared/normalize/tool-summary";
 import type { AgentQuestion, IssueDetail, Project } from "../../shared/work/types";
+import { ticketsInstructions } from "./ticket-drafts";
 
 /** The prompt a ticket becomes, and how the runner reads `claude -p` stream-json output. */
 
@@ -16,6 +17,18 @@ export function buildPrompt(
     "Description:",
     issue.description.trim() || "(no description)",
   ];
+  if (issue.parent)
+    lines.push(
+      "",
+      `This ticket belongs to the epic ${issue.parent.key} (${issue.parent.summary}). Do only this ticket's part of it.`,
+    );
+  if (issue.children?.length) {
+    lines.push("", "This ticket is an epic. Its tickets already exist:");
+    for (const c of issue.children) lines.push(`- ${c.key} ${c.summary} (${c.status})`);
+    lines.push(
+      "Do not create them again. An agent works on one ticket at a time, so the work itself is done on those tickets, not here. Unless this epic asks for something of its own that none of them covers, change nothing and end by saying which ticket to start with and why.",
+    );
+  }
   // Only people trusted with the repository get to talk to the agent.
   const comments = issue.comments.filter((c) => c.trusted).slice(-5);
   if (comments.length) {
@@ -30,7 +43,8 @@ export function buildPrompt(
     "Implement the ticket in this repository. Follow the conventions of the existing code and run the relevant tests or checks if the project has them.",
     "Do not commit, push or open a pull request: this is done for you when you finish.",
     "If the ticket is unclear or can't be done, change nothing and explain why.",
-    "End with a short summary of what you changed and how you checked it; it becomes the pull request description.",
+    ticketsInstructions(),
+    "End with a summary of what you did, how you checked it, and anything the next person needs to know (decisions taken, what is left, open questions). It becomes the pull request description and is posted on the ticket.",
   );
   if (project.agent.instructions?.trim())
     lines.push("", "Project instructions:", project.agent.instructions.trim());
@@ -70,7 +84,8 @@ export function buildContinuePrompt(
   lines.push(
     "",
     "Same rules as before: do not commit, push or open a pull request, this is done for you.",
-    "End with a short summary of what you changed this time; it is added to the pull request.",
+    ticketsInstructions(),
+    "End with a summary of what you did this time and anything the next person needs to know; it is posted on the ticket.",
   );
   if (project.agent.instructions?.trim())
     lines.push("", "Project instructions:", project.agent.instructions.trim());
@@ -133,6 +148,35 @@ export function readStreamLine(raw: string, cwd?: string): StreamUpdate {
     };
   }
   return {};
+}
+
+/** Claude Code stopped because the account's session or weekly limit is used up. */
+export const isUsageLimit = (text: string): boolean => /hit your .*limit|usage limit/i.test(text);
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/**
+ * When the limit resets, from "resets 8:40pm (Europe/Paris)" or "resets Nov 3, 9am", read
+ * in this machine's time zone. A time without a date is the next one to come.
+ */
+export function resetTime(text: string, now = new Date()): number | undefined {
+  const match =
+    /resets\s+(?:([a-z]{3})[a-z]*\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)/i.exec(
+      text,
+    );
+  if (!match) return undefined;
+  const [, month, day, hours, minutes, half] = match;
+  const at = new Date(now);
+  at.setHours(
+    (Number(hours) % 12) + (half!.toLowerCase() === "pm" ? 12 : 0),
+    Number(minutes ?? 0),
+    0,
+    0,
+  );
+  const monthIndex = month ? MONTHS.indexOf(month.toLowerCase()) : -1;
+  if (monthIndex >= 0) at.setMonth(monthIndex, Number(day));
+  else if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
+  return at.getTime();
 }
 
 /** `reference` points at the ticket: a Jira link, or "Closes #12". */
