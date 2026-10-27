@@ -107,6 +107,9 @@ interface GhIssue {
   assignee?: { login: string } | null;
   labels?: (string | { name?: string })[];
   pull_request?: unknown;
+  /** Set when sub-issues are on and the issue has a parent. */
+  parent_issue_url?: string | null;
+  sub_issues_summary?: { total: number; completed: number };
 }
 
 interface GhComment {
@@ -326,6 +329,7 @@ export class GitHubIssues implements IssueTracker {
     const labels = (issue.labels ?? [])
       .map((l) => (typeof l === "string" ? l : l.name))
       .filter(Boolean);
+    const parent = issue.parent_issue_url?.match(/\/issues\/(\d+)$/)?.[1];
     return {
       key: `#${issue.number}`,
       summary: issue.title,
@@ -335,6 +339,10 @@ export class GitHubIssues implements IssueTracker {
       assignee: issue.assignee?.login,
       updated: issue.updated_at,
       url: issue.html_url,
+      parentKey: parent && `#${parent}`,
+      childCount: issue.sub_issues_summary?.total
+        ? { total: issue.sub_issues_summary.total, done: issue.sub_issues_summary.completed }
+        : undefined,
     };
   }
 }

@@ -194,6 +194,10 @@ export interface IssueSummary {
   assignee?: string;
   updated: string;
   url: string;
+  /** The epic or ticket this one belongs to, when the tracker lists it. */
+  parentKey?: string;
+  /** Its own tickets, when the tracker counts them in the list. */
+  childCount?: { total: number; done: number };
 }
 
 export interface Transition {

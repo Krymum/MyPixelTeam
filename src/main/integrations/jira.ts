@@ -34,7 +34,15 @@ export function normalizeSite(input: string): string {
   return url.origin;
 }
 
-const SUMMARY_FIELDS = ["summary", "status", "issuetype", "priority", "assignee", "updated"];
+const SUMMARY_FIELDS = [
+  "summary",
+  "status",
+  "issuetype",
+  "priority",
+  "assignee",
+  "updated",
+  "parent",
+];
 
 interface RawIssue {
   key: string;
@@ -164,7 +172,7 @@ export class JiraClient {
     const [raw, transitions, permissions, childIssues] = await Promise.all([
       this.call<RawIssue>(
         "GET",
-        `/issue/${k}?fields=${[...SUMMARY_FIELDS, "description", "comment", "attachment", "parent"].join(",")}`,
+        `/issue/${k}?fields=${[...SUMMARY_FIELDS, "description", "comment", "attachment"].join(",")}`,
       ),
       this.transitions(key),
       this.permissions(projectKey),
@@ -308,6 +316,7 @@ export class JiraClient {
       assignee: f.assignee?.displayName,
       updated: f.updated ?? "",
       url: this.issueUrl(raw.key),
+      parentKey: f.parent?.key,
     };
   }
 }

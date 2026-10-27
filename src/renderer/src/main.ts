@@ -7,10 +7,12 @@ import { drawBackground, SCENERY, type Drawable } from "./scenery";
 import { FRAME_H, FRAME_W } from "./sprites/character-art";
 import type { Pose } from "./sprites/character";
 import { characterSprite, forgetCharacter } from "./sprites/cache";
+import { needsYou } from "../../shared/work/run-state";
 import { trackerLabel } from "../../shared/work/types";
 import { initBoard, resetBoard, showAgents, showIssue, toggleBoard } from "./work/board";
 import { waitingRuns } from "./work/questions-ui";
 import { initSettings, openSettings } from "./work/settings";
+import { dismissed } from "./work/dismissed";
 import { checkMachine, initWelcome, openWelcome } from "./work/welcome";
 import { activeProject, loadWork, subscribe, update, work } from "./work/store";
 
@@ -331,9 +333,14 @@ function initWork(): void {
   subscribe(() => {
     renderProjectSelect();
     renderMachineWarning();
+    // Questions first: an agent is blocked until it gets an answer.
     const waiting = waitingRuns(work.runs).length;
-    waitingAgents.hidden = waiting === 0;
-    waitingAgents.textContent = `${waiting} agent${waiting > 1 ? "s" : ""} waiting for you`;
+    const needs = needsYou(work.runs, dismissed()).length;
+    waitingAgents.hidden = needs === 0;
+    waitingAgents.classList.toggle("urgent", waiting > 0);
+    waitingAgents.textContent = waiting
+      ? `${waiting} agent${waiting > 1 ? "s" : ""} waiting for you`
+      : `${needs} thing${needs > 1 ? "s" : ""} for you`;
     // Deleting or creating the first project changes the active one.
     if (activeProject()?.id !== shownProject) {
       shownProject = activeProject()?.id;
