@@ -15,6 +15,7 @@ import { AccountStore } from "./work/accounts";
 import { registerWorkIpc } from "./work/ipc";
 import { Notifier } from "./work/notify";
 import { AgentRunner } from "./work/runner";
+import { CommentWatcher } from "./work/comment-watch";
 import { WorkspaceStore } from "./work/workspace";
 
 // The app was called Agent Office: its accounts, projects, clones and worktrees live in
@@ -56,6 +57,7 @@ const info: ServerInfo = {
 let win: BrowserWindow | null = null;
 let resolveRole = createRoleResolver(DEFAULT_CONFIG);
 let runner: AgentRunner | undefined;
+let comments: CommentWatcher | undefined;
 let notifier: Notifier | undefined;
 
 function useConfig(loaded: LoadedConfig): void {
@@ -236,6 +238,8 @@ function startWork(): void {
         detail: phase === "started" ? { message: run.issueSummary } : {},
       }),
   });
+  comments = new CommentWatcher({ runner, accounts, workspace });
+  comments.start();
   registerWorkIpc({
     accounts,
     workspace,
@@ -278,7 +282,10 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on("before-quit", () => runner?.stopAll());
+app.on("before-quit", () => {
+  comments?.stop();
+  runner?.stopAll();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

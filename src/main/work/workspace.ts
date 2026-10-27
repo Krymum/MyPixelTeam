@@ -13,6 +13,7 @@ export class WorkspaceStore {
     maxAgents: 2,
     runBudgetUsd: 3,
     fixCi: true,
+    commentCommands: true,
   };
 
   constructor(
@@ -77,7 +78,10 @@ export class WorkspaceStore {
   /** Preferences stored next to the projects. */
   setPreferences(
     prefs: Partial<
-      Pick<Workspace, "onboarded" | "notifications" | "maxAgents" | "runBudgetUsd" | "fixCi">
+      Pick<
+        Workspace,
+        "onboarded" | "notifications" | "maxAgents" | "runBudgetUsd" | "fixCi" | "commentCommands"
+      >
     >,
   ): Workspace {
     const parsed = Workspace.safeParse({ ...this.state, ...prefs });

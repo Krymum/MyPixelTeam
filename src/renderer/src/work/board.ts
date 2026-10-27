@@ -662,7 +662,9 @@ function runSummary(run: RunView): HTMLElement {
     resume.append(
       el(
         "span",
-        `Picks the ticket up again at ${clock(run.resumeAt)}, when the usage limit resets.`,
+        run.resumeAt > Date.now()
+          ? `Picks the ticket up again at ${clock(run.resumeAt)}, when the usage limit resets.`
+          : "Picks the ticket up again in a moment.",
         "wait",
       ),
       button("Don't", () => void api().cancelRun(run.id)),

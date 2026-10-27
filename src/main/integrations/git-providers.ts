@@ -147,6 +147,7 @@ export class GitHubProvider implements GitProvider {
         body: c.body!,
         path: c.path,
         line: c.line ?? undefined,
+        created: at(c) || undefined,
         trusted: isTrustedAuthor(c.author_association),
       }));
   }
@@ -372,6 +373,7 @@ export class BitbucketProvider implements GitProvider {
       deleted?: boolean;
       user?: { display_name?: string; nickname?: string };
       content?: { raw?: string };
+      created_on?: string;
       inline?: { path?: string; to?: number | null; from?: number | null };
     };
     // Bitbucket gives no author role: on a private repository only members can comment,
@@ -387,6 +389,7 @@ export class BitbucketProvider implements GitProvider {
         body: c.content!.raw!,
         path: c.inline?.path,
         line: c.inline?.to ?? c.inline?.from ?? undefined,
+        created: c.created_on,
         trusted: repo.private,
       }));
   }

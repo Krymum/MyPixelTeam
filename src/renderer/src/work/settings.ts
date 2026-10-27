@@ -170,6 +170,16 @@ function preferencesSection(): HTMLElement {
     fixCi,
     ` When a pull request's checks fail, put its agent back on it (${MAX_CI_FIXES} times at most)`,
   );
+  const commands = input("", "", "checkbox");
+  commands.checked = work.workspace.commentCommands;
+  commands.addEventListener("change", async () => {
+    update({ workspace: await api().setPreferences({ commentCommands: commands.checked }) });
+  });
+  const commandsLabel = el("label", undefined, "check");
+  commandsLabel.append(
+    commands,
+    " A comment starting with @agent on a ticket or its pull request puts its agent back on it",
+  );
   const guide = button("Open the setup guide", () => {
     dialog.close();
     openWelcome();
@@ -187,6 +197,7 @@ function preferencesSection(): HTMLElement {
       "An agent that reaches it stops and keeps its changes; continuing the run gives it the same budget again.",
     ),
     fixCiLabel,
+    commandsLabel,
     label,
     hooksCard(),
     guide,

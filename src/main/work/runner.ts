@@ -96,7 +96,9 @@ const CI_WATCH_MS = 45 * 60_000;
 /** Checks can take a moment to show up; with none after this, the repository runs none. */
 const CI_SETTLE_MS = 3 * 60_000;
 const RESUME_INSTRUCTION =
-  "The Claude usage limit stopped you before you finished. Pick the ticket up where you left off: your changes so far are still in the worktree.";
+  "You were stopped before you finished (the Claude usage limit, or the app was closed). Pick the ticket up where you left off: your changes so far are still in the worktree.";
+/** Restored work waits this long after launch, so the app has settled first. */
+const RESTORE_DELAY_MS = 10_000;
 
 class Cancelled extends Error {}
 
@@ -119,6 +121,13 @@ interface EpicChain {
   ticket?: { key: string; summary: string };
 }
 
+/** What survives the app closing: the queue, the epics under way, the checks followed. */
+interface RunnerState {
+  plans: { runId: string; plan: Plan; first: boolean }[];
+  epics: EpicChain[];
+  ci: { runId: string; sha: string; since: number }[];
+}
+
 /** A run waiting for a free desk, with what it will do once it gets one. */
 interface Waiting {
   project: Project;
@@ -137,16 +146,57 @@ export class AgentRunner {
   private pausedUntil = 0;
   private readonly epics = new Map<string, EpicChain>();
   private readonly ciTimers = new Map<string, NodeJS.Timeout>();
+  /** What each unfinished run does, kept so it can start again after a restart. */
+  private readonly plans = new Map<string, { plan: Plan; first: boolean }>();
+  private readonly ciWatches = new Map<string, { sha: string; since: number }>();
+  /** The app is quitting: runs stop, and nothing new starts or gets reported. */
+  private stopping = false;
   private changeTimer?: NodeJS.Timeout;
   private resumeTimer?: NodeJS.Timeout;
 
   constructor(private readonly options: RunnerOptions) {
     for (const run of loadHistory(options.historyPath)) this.runs.set(run.id, run);
+    const restored = this.restore(loadState(this.statePath()));
     const resumes = [...this.runs.values()].flatMap((r) => (r.resumeAt ? [r.resumeAt] : []));
     if (resumes.length) {
       this.pausedUntil = Math.max(...resumes);
       this.scheduleResume();
+    } else if (restored) setTimeout(() => this.drain(), RESTORE_DELAY_MS);
+  }
+
+  /**
+   * Picks up what the app was doing when it closed: queued tickets wait again, agents that
+   * had started resume their session, epics and checks carry on. True when anything did.
+   */
+  private restore(state: RunnerState): boolean {
+    const project = (id: string) => {
+      try {
+        return this.options.workspace.get(id);
+      } catch {
+        return undefined;
+      }
+    };
+    for (const { runId, plan, first } of state.plans) {
+      const run = this.runs.get(runId);
+      const where = run && project(run.projectId);
+      if (!run || !where) continue;
+      if (run.agentStarted && run.branch) {
+        run.resumeAt ??= Date.now();
+        this.log(run, "the app closed while the agent worked: it picks the ticket up again");
+      } else {
+        Object.assign(run, { status: "queued", error: undefined, endedAt: undefined });
+        this.waiting.set(run.id, { project: where, plan, first });
+        this.plans.set(run.id, { plan, first });
+        this.log(run, "back in the queue after the app restarted");
+      }
     }
+    for (const chain of state.epics) this.epics.set(`${chain.projectId}:${chain.epicKey}`, chain);
+    for (const { runId, sha, since } of state.ci) {
+      const run = this.runs.get(runId);
+      const where = run && project(run.projectId);
+      if (run && where) this.watchCi(run, where, sha, since);
+    }
+    return state.plans.length + state.epics.length > 0;
   }
 
   list(): RunView[] {
@@ -320,6 +370,7 @@ export class AgentRunner {
   private launch(run: RunView, project: Project, plan: Plan, first = false): RunView {
     this.runs.set(run.id, run);
     this.waiting.set(run.id, { project, plan, first });
+    this.plans.set(run.id, { plan, first });
     this.trim();
     this.drain();
     if (run.status === "queued")
@@ -335,7 +386,7 @@ export class AgentRunner {
 
   /** Starts waiting runs while fewer agents than allowed are working, resumed ones first. */
   drain(): void {
-    if (this.pausedUntil > Date.now()) return;
+    if (this.stopping || this.pausedUntil > Date.now()) return;
     const limit = this.options.workspace.view().maxAgents;
     while (this.working() < limit) {
       const next =
@@ -378,12 +429,17 @@ export class AgentRunner {
     this.changed();
   }
 
-  /** On quit: agents must not keep running without the app watching them. */
+  /**
+   * On quit: agents must not keep running without the app watching them. What they were
+   * doing is kept first, so the next launch picks it up.
+   */
   stopAll(): void {
+    const state = this.state();
+    this.stopping = true;
     clearTimeout(this.resumeTimer);
     for (const timer of this.ciTimers.values()) clearTimeout(timer);
     for (const run of this.runs.values()) if (isActiveRun(run)) this.cancel(run.id);
-    this.save();
+    this.save(state);
   }
 
   private async execute(run: RunView, project: Project, plan: Plan): Promise<void> {
@@ -432,6 +488,7 @@ export class AgentRunner {
       base: start,
       auth,
       existing,
+      fresh: plan.kind === "new",
     });
     if (note) this.log(run, note);
     this.check(run);
@@ -470,6 +527,8 @@ export class AgentRunner {
     } catch (err) {
       // `cancel` changes the status behind TypeScript's back.
       const cancelled = err instanceof Cancelled || (run.status as RunStatus) === "cancelled";
+      // Closing the app stops agents only until the next launch.
+      if (this.stopping) throw err;
       await this.note(
         run,
         tracker,
@@ -564,15 +623,16 @@ export class AgentRunner {
    * Follows the pull request's checks after a push. When they fail, the agent goes back on
    * its pull request with the failure, at most MAX_CI_FIXES times in a row.
    */
-  private watchCi(run: RunView, project: Project, sha: string): void {
+  private watchCi(run: RunView, project: Project, sha: string, since = Date.now()): void {
     const provider = this.options.accounts.git(project.repo.provider);
-    const since = Date.now();
     run.ci = "pending";
+    this.ciWatches.set(run.id, { sha, since });
     this.changed();
     const check = async (): Promise<void> => {
       this.ciTimers.delete(run.id);
+      if (run.ci !== "pending") this.ciWatches.delete(run.id);
       // A newer run on the ticket pushed again: its own watch takes over.
-      if (this.latest(run) !== run) return;
+      if (this.latest(run) !== run) return void this.ciWatches.delete(run.id);
       let report: CiReport;
       try {
         report = await provider.checks(project.repo.fullName, sha);
@@ -583,6 +643,7 @@ export class AgentRunner {
       const waited = Date.now() - since;
       if (report.state === "none" && waited >= CI_SETTLE_MS) {
         run.ci = undefined;
+        this.ciWatches.delete(run.id);
         return this.log(run, "no checks on the pull request");
       }
       if (report.state === "none" || report.state === "pending") {
@@ -593,11 +654,13 @@ export class AgentRunner {
           );
         else {
           run.ci = undefined;
+          this.ciWatches.delete(run.id);
           this.log(run, "checks still running after 45 minutes: no longer followed");
         }
         return;
       }
       run.ci = report.state;
+      this.ciWatches.delete(run.id);
       if (report.state === "success") return this.log(run, "checks passed");
       this.log(run, `checks failed: ${report.failed.map((f) => f.name).join(", ")}`);
       this.fixCi(run, report.failed);
@@ -886,6 +949,9 @@ export class AgentRunner {
       run.error = message(err);
       this.log(run, `failed: ${run.error}`);
     }
+    // Quitting: the run starts again on the next launch, its epic with it.
+    if (this.stopping) return;
+    this.plans.delete(run.id);
     this.changed();
     this.options.onFinished?.(run);
     this.epicStep(run);
@@ -914,13 +980,28 @@ export class AgentRunner {
     }
   }
 
-  private save(): void {
+  private state(): RunnerState {
+    return {
+      plans: [...this.plans].map(([runId, p]) => ({ runId, ...p })),
+      epics: [...this.epics.values()],
+      ci: [...this.ciWatches].map(([runId, w]) => ({ runId, ...w })),
+    };
+  }
+
+  private statePath(): string | undefined {
+    const path = this.options.historyPath;
+    return path && join(dirname(path), "runner-state.json");
+  }
+
+  /** While quitting, only the final save (with the state from before the stop) is written. */
+  private save(state?: RunnerState): void {
+    if (this.stopping && !state) return;
     const path = this.options.historyPath;
     if (!path) return;
     try {
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(`${path}.tmp`, JSON.stringify([...this.runs.values()]));
-      renameSync(`${path}.tmp`, path);
+      writeJson(path, [...this.runs.values()]);
+      writeJson(this.statePath()!, state ?? this.state());
     } catch (err) {
       console.error(`[mypixelteam] could not save ${path}:`, err);
     }
@@ -936,23 +1017,45 @@ export function loadHistory(path: string | undefined): RunView[] {
   try {
     const runs = JSON.parse(readFileSync(path, "utf8")) as RunView[];
     if (!Array.isArray(runs)) return [];
-    return runs.slice(-RUN_LIMIT).map((run) =>
-      run.ci === "pending"
-        ? { ...run, ci: undefined }
-        : isActiveRun(run)
-          ? {
-              ...run,
-              questions: [],
-              status: "failed",
-              endedAt: run.endedAt ?? Date.now(),
-              error: "Interrupted: the app was closed",
-            }
-          : run,
-    );
+    return runs.slice(-RUN_LIMIT).map((saved) => {
+      // Checks still followed come back from the runner state.
+      const run = saved.ci === "pending" ? { ...saved, ci: undefined } : saved;
+      return isActiveRun(run)
+        ? {
+            ...run,
+            questions: [],
+            status: "failed",
+            endedAt: run.endedAt ?? Date.now(),
+            error: "Interrupted: the app was closed",
+          }
+        : run;
+    });
   } catch (err) {
     console.error(`[mypixelteam] could not read ${path}:`, err);
     return [];
   }
+}
+
+const EMPTY_STATE: RunnerState = { plans: [], epics: [], ci: [] };
+
+function loadState(path: string | undefined): RunnerState {
+  if (!path || !existsSync(path)) return EMPTY_STATE;
+  try {
+    const state = JSON.parse(readFileSync(path, "utf8")) as Partial<RunnerState>;
+    return {
+      plans: Array.isArray(state.plans) ? state.plans : [],
+      epics: Array.isArray(state.epics) ? state.epics : [],
+      ci: Array.isArray(state.ci) ? state.ci : [],
+    };
+  } catch (err) {
+    console.error(`[mypixelteam] could not read ${path}:`, err);
+    return EMPTY_STATE;
+  }
+}
+
+function writeJson(path: string, value: unknown): void {
+  writeFileSync(`${path}.tmp`, JSON.stringify(value));
+  renameSync(`${path}.tmp`, path);
 }
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));

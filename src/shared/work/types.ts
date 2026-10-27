@@ -145,6 +145,8 @@ export const Workspace = z.object({
   runBudgetUsd: z.number().min(0).max(100).default(3),
   /** When a pull request's checks fail, put its agent back on it with the failure logs. */
   fixCi: z.boolean().default(true),
+  /** A trusted comment starting with "@agent" puts the ticket's agent back on it. */
+  commentCommands: z.boolean().default(true),
 });
 export type Workspace = z.infer<typeof Workspace>;
 
