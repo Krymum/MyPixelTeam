@@ -2,6 +2,7 @@ import type { OfficeEvent } from "../shared/protocol/schema";
 import type {
   AccountInput,
   AccountsView,
+  ContinueOptions,
   DeviceCode,
   DiscoveredProject,
   EnvironmentCheck,
@@ -17,6 +18,7 @@ import type {
   NewIssue,
   ProjectInput,
   ProviderId,
+  QuestionAnswer,
   RepoSummary,
   RunView,
   StartRunOptions,
@@ -72,6 +74,7 @@ export const WORK_CALLS = [
   "startRun",
   "cancelRun",
   "answerQuestion",
+  "continueRun",
 ] as const;
 
 export interface ServerInfo {
@@ -149,13 +152,18 @@ export interface WorkApi {
   /** Puts an agent on the ticket. */
   startRun(projectId: string, issueKey: string, options?: StartRunOptions): Promise<RunView>;
   cancelRun(id: string): Promise<void>;
-  /** Allows or refuses what an agent asked; a refusal's message reaches the agent. */
+  /**
+   * Allows or refuses what an agent asked; "always" also allows the same for the rest of
+   * the run. A refusal's message reaches the agent.
+   */
   answerQuestion(
     runId: string,
     questionId: string,
-    allow: boolean,
+    answer: QuestionAnswer,
     message?: string,
   ): Promise<void>;
+  /** Resumes a finished run's session with a new instruction (and the review, if asked). */
+  continueRun(runId: string, instruction: string, options?: ContinueOptions): Promise<RunView>;
   onRuns(listener: (runs: RunView[]) => void): () => void;
   onOpenIssue(listener: (projectId: string, issueKey: string) => void): () => void;
 }

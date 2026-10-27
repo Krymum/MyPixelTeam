@@ -9,13 +9,16 @@ import {
   isIssueKey,
   issueSlug,
   type AgentQuestion,
+  type ContinueOptions,
   type Project,
+  type QuestionAnswer,
   type RunStatus,
   type StartRunOptions,
   type RunView,
 } from "../../shared/work/types";
 import type { AccountStore } from "./accounts";
 import {
+  buildContinuePrompt,
   buildPrompt,
   describeRequest,
   permissionResponse,
@@ -25,6 +28,7 @@ import {
   readStreamLine,
   unsupportedResponse,
   type PermissionRequest,
+  type ReviewComment,
   type StreamResult,
 } from "./agent-protocol";
 import {
@@ -71,6 +75,11 @@ const RUN_LIMIT = 50;
 
 class Cancelled extends Error {}
 
+/** What a run does: a ticket's first run, or the continuation of an earlier one. */
+type Plan =
+  | { kind: "new"; options: StartRunOptions }
+  | { kind: "continue"; instruction: string; includeReview: boolean };
+
 export class AgentRunner {
   private readonly runs = new Map<string, RunView>();
   private readonly children = new Map<string, ChildProcess>();
@@ -87,8 +96,8 @@ export class AgentRunner {
   }
 
   bySession(sessionId: string): RunView | undefined {
-    for (const run of this.runs.values()) if (run.sessionId === sessionId) return run;
-    return undefined;
+    // A continued run shares its session with the earlier ones: the latest one is current.
+    return this.list().find((run) => run.sessionId === sessionId);
   }
 
   start(projectId: string, issueKey: string, options: StartRunOptions = {}): RunView {
@@ -108,10 +117,55 @@ export class AgentRunner {
       startedAt: Date.now(),
       log: [],
     };
+    return this.launch(run, project, { kind: "new", options });
+  }
+
+  /**
+   * Resumes the agent's session of an earlier run, on the same branch and worktree, with a
+   * new instruction and, if asked, the pull request's review comments.
+   */
+  continueRun(previousRunId: string, instruction: string, options: ContinueOptions = {}): RunView {
+    const previous = this.runs.get(previousRunId);
+    if (!previous) throw new Error("Unknown run");
+    if (!previous.agentStarted || !previous.branch)
+      throw new Error(
+        "That run stopped before its agent started: put an agent on the ticket again",
+      );
+    if (!instruction.trim() && !options.includeReview)
+      throw new Error("Say what the agent should do next");
+    const busy = [...this.runs.values()].find(
+      (r) =>
+        r.issueKey === previous.issueKey && r.projectId === previous.projectId && isActiveRun(r),
+    );
+    if (busy) throw new Error(`An agent is already on ${previous.issueKey}`);
+    const project = this.options.workspace.get(previous.projectId);
+    const run: RunView = {
+      id: randomUUID(),
+      projectId: previous.projectId,
+      issueKey: previous.issueKey,
+      issueSummary: previous.issueSummary,
+      sessionId: previous.sessionId,
+      status: "preparing",
+      branch: previous.branch,
+      worktree: previous.worktree,
+      startedAt: Date.now(),
+      pullRequestUrl: previous.pullRequestUrl,
+      continuedFrom: previous.id,
+      instruction: instruction.trim() || undefined,
+      log: [],
+    };
+    return this.launch(run, project, {
+      kind: "continue",
+      instruction,
+      includeReview: Boolean(options.includeReview),
+    });
+  }
+
+  private launch(run: RunView, project: Project, plan: Plan): RunView {
     this.runs.set(run.id, run);
     this.trim();
     this.changed();
-    void this.execute(run, project, options).catch((err) => {
+    void this.execute(run, project, plan).catch((err) => {
       const cancelled = err instanceof Cancelled || run.status === "cancelled";
       this.finish(run, cancelled ? "cancelled" : "failed", cancelled ? undefined : err);
     });
@@ -134,14 +188,16 @@ export class AgentRunner {
     this.save();
   }
 
-  private async execute(run: RunView, project: Project, options: StartRunOptions): Promise<void> {
+  private async execute(run: RunView, project: Project, plan: Plan): Promise<void> {
+    const options = plan.kind === "new" ? plan.options : {};
     const { accounts } = this.options;
     const tracker = accounts.tracker(project);
     const provider = accounts.git(project.repo.provider);
     const auth = provider.gitAuth();
 
     const issue = await tracker.issue(run.issueKey);
-    if (!issue.trusted && !options.allowUntrusted)
+    // A continued run was accepted when it started; its new words come from the person.
+    if (plan.kind === "new" && !issue.trusted && !options.allowUntrusted)
       throw new Error(
         `${issue.key} was opened by ${issue.author ?? "someone"}, who is not a collaborator of the repository. ` +
           "Read it, then confirm to put an agent on it anyway.",
@@ -154,13 +210,12 @@ export class AgentRunner {
     this.log(run, `repository: ${project.localPath}`);
     await ensureClone(project.repo.cloneUrl, project.localPath, auth);
     this.check(run);
-    // An existing branch was picked by the person among those on origin: check it still is.
     // A branch picked among those on origin must still be there; the agent's own branch from
     // an earlier run continues from origin too, or its push would be refused.
     const onOrigin = await remoteBranches(project.localPath, auth);
     if (options.branch && !onOrigin.includes(options.branch))
       throw new Error(`The branch ${options.branch} is no longer on origin`);
-    run.branch = options.branch ?? branchName(issue.key, issue.summary);
+    if (plan.kind === "new") run.branch = options.branch ?? branchName(issue.key, issue.summary);
     const existing = onOrigin.includes(run.branch);
     this.log(
       run,
@@ -182,13 +237,19 @@ export class AgentRunner {
 
     if (issue.statusCategory !== "indeterminate") await this.move(run, tracker, "start");
 
+    const prompt =
+      plan.kind === "new"
+        ? buildPrompt(issue, project, { branch: run.branch, base, existing })
+        : buildContinuePrompt(
+            issue,
+            project,
+            run.branch,
+            plan.instruction,
+            plan.includeReview ? await this.review(run, project) : [],
+          );
     run.status = "running";
     this.changed();
-    const result = await this.agent(
-      run,
-      project,
-      buildPrompt(issue, project, { branch: run.branch, base, existing }),
-    );
+    const result = await this.agent(run, project, prompt, plan.kind === "continue");
     this.check(run);
     run.result = result.text;
     run.costUsd = result.costUsd;
@@ -220,10 +281,31 @@ export class AgentRunner {
       await tracker
         .comment(
           issue.key,
-          `An agent opened a pull request: ${run.pullRequestUrl}\n\n${result.text}`,
+          `${plan.kind === "new" ? "An agent opened a pull request" : "An agent updated the pull request"}: ${run.pullRequestUrl}\n\n${result.text}`,
         )
         .catch((err) => this.log(run, `could not comment on the ticket: ${message(err)}`));
     this.finish(run, "done");
+  }
+
+  /** The pull request's review comments; a failure is logged, not fatal. */
+  private async review(run: RunView, project: Project): Promise<ReviewComment[]> {
+    if (!run.pullRequestUrl) {
+      this.log(run, "no pull request yet: no review to pass on");
+      return [];
+    }
+    try {
+      const comments = await this.options.accounts
+        .git(project.repo.provider)
+        .reviewComments(project.repo.fullName, run.pullRequestUrl);
+      const kept = comments.filter((c) => c.trusted).length;
+      this.log(run, `review: ${kept} comment${kept === 1 ? "" : "s"} passed on`);
+      if (kept < comments.length)
+        this.log(run, `${comments.length - kept} comment(s) from outside the team left out`);
+      return comments;
+    } catch (err) {
+      this.log(run, `could not read the review: ${message(err)}`);
+      return [];
+    }
   }
 
   /** Moves the ticket along its workflow when the tracker has a fitting status. */
@@ -236,13 +318,19 @@ export class AgentRunner {
     }
   }
 
-  private agent(run: RunView, project: Project, prompt: string): Promise<StreamResult> {
+  private agent(
+    run: RunView,
+    project: Project,
+    prompt: string,
+    resume: boolean,
+  ): Promise<StreamResult> {
     const args = [
       "-p",
       "--output-format",
       "stream-json",
       "--verbose",
-      "--session-id",
+      // A continued run picks its session up where the agent left it.
+      resume ? "--resume" : "--session-id",
       run.sessionId,
       "--name",
       run.issueKey,
@@ -274,6 +362,7 @@ export class AgentRunner {
       shell: /\.(cmd|bat)$/i.test(command),
     });
     this.children.set(run.id, child);
+    run.agentStarted = true;
     this.options.onSession(run, "started");
 
     return new Promise((resolve, reject) => {
@@ -345,17 +434,32 @@ export class AgentRunner {
   }
 
   /** Allows or refuses what the agent asked; a refusal's message reaches the agent. */
-  answer(runId: string, questionId: string, allow: boolean, message?: string): void {
+  answer(runId: string, questionId: string, answer: QuestionAnswer, message?: string): void {
     const run = this.runs.get(runId);
     const request = this.requests.get(runId)?.get(questionId);
     const child = this.children.get(runId);
     if (!run || !request || !child?.stdin?.writable)
       throw new Error("This question is no longer waiting for an answer");
-    child.stdin.write(permissionResponse(request, allow ? { allow } : { allow, message }));
+    child.stdin.write(
+      permissionResponse(
+        request,
+        answer === "deny"
+          ? { allow: false, message }
+          : { allow: true, always: answer === "always" },
+      ),
+    );
     this.requests.get(runId)!.delete(questionId);
     const question = run.questions?.find((q) => q.id === questionId);
     run.questions = (run.questions ?? []).filter((q) => q.id !== questionId);
-    this.log(run, `${allow ? "allowed" : "refused"}: ${question?.summary ?? request.toolName}`);
+    const what = question?.summary ?? request.toolName;
+    this.log(
+      run,
+      answer === "deny"
+        ? `refused: ${what}`
+        : answer === "always"
+          ? `allowed for this run: ${question?.alwaysRule ?? what}`
+          : `allowed: ${what}`,
+    );
     this.changed();
     this.options.onQuestion?.(run, undefined);
   }

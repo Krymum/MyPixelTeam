@@ -321,8 +321,19 @@ When an agent wants to do something its permission mode doesn't allow on its own
 `npm test`, write outside its worktree…), it pauses and asks. Its character raises its hand
 with a `?` bubble, the top bar shows "✋ 1 agent waiting for you", and a notification comes
 up while the window is in the background. The ticket and the **Agents** tab show the exact
-command with **Allow** and **Deny**; a refusal's reason is sent to the agent, which carries
-on without it. Clicking the character links to the ticket.
+command with **Allow**, **Always allow for this run** (when Claude Code proposes a rule such
+as `npm test:*`, it applies until the run ends and is written to no settings file) and
+**Deny**; a refusal's reason is sent to the agent, which carries on without it. Clicking
+the character links to the ticket.
+
+### Continuing a run
+
+Once a run is over, the ticket's **Continue where the agent left off** box resumes the same
+Claude Code session (`--resume`) on the same branch and worktree: the agent remembers what it
+did. Type what it should do next and, when there is a pull request, tick **Pass on the pull
+request's review comments**: inline comments, reviews and general comments are added to the
+instruction (on GitHub only those from owners, members and collaborators; on Bitbucket only
+on private repositories). The new commits go to the same pull request.
 
 Behind it, agents run with `--permission-prompt-tool stdio`: Claude Code sends each request
 as a `control_request` on its output, and the app answers on its input.

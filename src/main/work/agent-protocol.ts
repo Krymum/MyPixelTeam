@@ -37,6 +37,46 @@ export function buildPrompt(
   return lines.join("\n");
 }
 
+/** A comment left on the pull request, inline on a file or on the whole change. */
+export interface ReviewComment {
+  author: string;
+  body: string;
+  path?: string;
+  line?: number;
+  /** Written by someone trusted with the repository; others never reach an agent. */
+  trusted: boolean;
+}
+
+/** The prompt of a resumed session: the person's instruction, and the review if asked. */
+export function buildContinuePrompt(
+  issue: { key: string; summary: string },
+  project: Project,
+  branch: string,
+  instruction: string,
+  comments: ReviewComment[] = [],
+): string {
+  const lines = [
+    `You are continuing your work on ${issue.key} (${issue.summary}), in the same worktree on the branch ${branch}.`,
+  ];
+  if (instruction.trim()) lines.push("", "New instruction from the person:", instruction.trim());
+  const review = comments.filter((c) => c.trusted && c.body.trim()).slice(-30);
+  if (review.length) {
+    lines.push("", "Review comments on the pull request:");
+    for (const c of review) {
+      const where = c.path ? ` on ${c.path}${c.line ? `:${c.line}` : ""}` : "";
+      lines.push(`- ${c.author}${where}: ${c.body.replace(/\s+/g, " ").trim()}`);
+    }
+  }
+  lines.push(
+    "",
+    "Same rules as before: do not commit, push or open a pull request, this is done for you.",
+    "End with a short summary of what you changed this time; it is added to the pull request.",
+  );
+  if (project.agent.instructions?.trim())
+    lines.push("", "Project instructions:", project.agent.instructions.trim());
+  return lines.join("\n");
+}
+
 export interface StreamResult {
   text: string;
   isError: boolean;
@@ -118,13 +158,28 @@ export interface PermissionRequest {
   input: unknown;
   /** Claude Code's own wording of what the call does. */
   description?: string;
+  /** Rules Claude Code proposes so the same call isn't asked again. */
+  suggestions?: PermissionSuggestion[];
+}
+
+interface PermissionSuggestion {
+  type?: string;
+  behavior?: string;
+  rules?: { toolName?: string; ruleContent?: string }[];
+  destination?: string;
 }
 
 export function readPermissionRequest(line: unknown): PermissionRequest | undefined {
   const j = line as {
     type?: string;
     request_id?: string;
-    request?: { subtype?: string; tool_name?: string; input?: unknown; description?: string };
+    request?: {
+      subtype?: string;
+      tool_name?: string;
+      input?: unknown;
+      description?: string;
+      permission_suggestions?: PermissionSuggestion[];
+    };
   };
   if (j?.type !== "control_request" || j.request?.subtype !== "can_use_tool") return undefined;
   if (!j.request_id || !j.request.tool_name) return undefined;
@@ -133,6 +188,9 @@ export function readPermissionRequest(line: unknown): PermissionRequest | undefi
     toolName: j.request.tool_name,
     input: j.request.input,
     description: j.request.description,
+    suggestions: Array.isArray(j.request.permission_suggestions)
+      ? j.request.permission_suggestions
+      : undefined,
   };
 }
 
@@ -155,16 +213,37 @@ export function describeRequest(
     summary: summarizeTool(request.toolName, request.input, cwd).summary,
     detail: detail.length > 2000 ? `${detail.slice(0, 1999)}…` : detail,
     reason: text(input.description) ?? text(request.description),
+    alwaysRule: alwaysRule(request),
   };
+}
+
+/** The rule "always allow for this run" adds, as the person would read it. */
+function alwaysRule(request: PermissionRequest): string | undefined {
+  const rule = request.suggestions?.find((s) => s.type === "addRules" && s.behavior === "allow")
+    ?.rules?.[0];
+  if (!rule) return undefined;
+  return rule.ruleContent ? rule.ruleContent : (rule.toolName ?? request.toolName);
 }
 
 /** The answer line written to the agent's stdin. */
 export function permissionResponse(
   request: PermissionRequest,
-  answer: { allow: true } | { allow: false; message?: string },
+  answer: { allow: true; always?: boolean } | { allow: false; message?: string },
 ): string {
+  // "Always" hands Claude Code its own suggested rules for this session only: nothing is
+  // written to any settings file, and the next run asks again.
+  const always =
+    answer.allow && answer.always
+      ? (request.suggestions ?? [])
+          .filter((s) => s.type === "addRules" && s.behavior === "allow")
+          .map((s) => ({ ...s, destination: "session" }))
+      : [];
   const response = answer.allow
-    ? { behavior: "allow", updatedInput: request.input ?? {} }
+    ? {
+        behavior: "allow",
+        updatedInput: request.input ?? {},
+        ...(always.length ? { updatedPermissions: always } : {}),
+      }
     : {
         behavior: "deny",
         message: answer.message?.trim() || "Refused by the person in the office.",

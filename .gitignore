@@ -5,3 +5,6 @@ coverage/
 *.log
 .claude/settings.local.json
 *.bak-*
+
+# Personal hook debugging (dump.js, events.log), used by .claude/settings.local.json
+hooks/

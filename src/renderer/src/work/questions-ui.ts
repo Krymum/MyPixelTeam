@@ -1,4 +1,4 @@
-import type { RunView } from "../../../shared/work/types";
+import type { QuestionAnswer, RunView } from "../../../shared/work/types";
 import { busy, button, el, input } from "../dom";
 
 /**
@@ -20,19 +20,30 @@ export function questionsBox(run: RunView): HTMLElement | undefined {
     const status = el("p", "", "status");
     const reason = input(drafts.get(q.id) ?? "", "Reason if you refuse (sent to the agent)");
     reason.addEventListener("input", () => drafts.set(q.id, reason.value));
-    const answer = (allow: boolean) =>
+    const answer = (choice: QuestionAnswer) =>
       void busy(undefined, status, async () => {
-        await api().answerQuestion(run.id, q.id, allow, allow ? undefined : reason.value);
+        await api().answerQuestion(
+          run.id,
+          q.id,
+          choice,
+          choice === "deny" ? reason.value : undefined,
+        );
         drafts.delete(q.id);
       });
     const actions = el("div", undefined, "actions");
-    actions.append(
-      button("Allow", () => answer(true), "primary"),
-      button("Deny", () => answer(false), "danger"),
-    );
+    actions.append(button("Allow", () => answer("allow"), "primary"));
+    // Claude Code's own rule for this call ("npm test:*"), for this run only.
+    if (q.alwaysRule) {
+      const always = button(`Always allow for this run`, () => answer("always"));
+      always.title = `Allows ${q.alwaysRule} without asking until this run ends`;
+      actions.append(always);
+    }
+    actions.append(button("Deny", () => answer("deny"), "danger"));
     card.append(el("strong", `✋ ${run.issueKey} asks to use ${q.tool}`));
     if (q.reason) card.append(el("div", q.reason, "muted"));
-    card.append(el("pre", q.detail, "log"), reason, actions, status);
+    card.append(el("pre", q.detail, "log"));
+    if (q.alwaysRule) card.append(el("small", `"Always" allows: ${q.alwaysRule}`, "muted"));
+    card.append(reason, actions, status);
     box.append(card);
   }
   return box;

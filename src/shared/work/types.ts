@@ -303,7 +303,17 @@ export interface AgentQuestion {
   detail: string;
   /** Why, in the agent's words, when it said. */
   reason?: string;
+  /** What "always allow for this run" would allow, e.g. "npm test:*", when offered. */
+  alwaysRule?: string;
   askedAt: number;
+}
+
+/** An answer to an agent's question. "always" also allows the same again for this run. */
+export type QuestionAnswer = "allow" | "always" | "deny";
+
+export interface ContinueOptions {
+  /** Pass the pull request's review comments on to the agent. */
+  includeReview?: boolean;
 }
 
 export interface RunView {
@@ -327,6 +337,11 @@ export interface RunView {
   log: string[];
   /** Questions waiting for an answer; the agent is paused on them. */
   questions?: AgentQuestion[];
+  /** The agent's session started: a later run can resume it. */
+  agentStarted?: boolean;
+  /** This run resumed the session of that run, with `instruction`. */
+  continuedFrom?: string;
+  instruction?: string;
 }
 
 export const isActiveRun = (run: RunView): boolean =>

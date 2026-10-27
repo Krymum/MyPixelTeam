@@ -179,8 +179,10 @@ export function registerWorkIpc(deps: {
     },
     startRun: async (projectId, key, options) => runner.start(projectId, key, options),
     cancelRun: async (id) => runner.cancel(id),
-    answerQuestion: async (runId, questionId, allow, message) =>
-      runner.answer(runId, questionId, allow, message),
+    answerQuestion: async (runId, questionId, answer, message) =>
+      runner.answer(runId, questionId, answer, message),
+    continueRun: async (runId, instruction, options) =>
+      runner.continueRun(runId, instruction, options),
   };
 
   for (const name of WORK_CALLS) {

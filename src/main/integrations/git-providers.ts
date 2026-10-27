@@ -1,5 +1,7 @@
 import type { GitProviderId, RepoSummary } from "../../shared/work/types";
+import type { ReviewComment } from "../work/agent-protocol";
 import { basicAuth, HttpError, jsonClient, type Fetch } from "./http";
+import { isTrustedAuthor } from "./trackers";
 
 /** What the runner needs from a code host: repositories, git credentials, pull requests. */
 export interface GitProvider {
@@ -12,6 +14,15 @@ export interface GitProvider {
   gitAuth(): { username: string; password: string };
   /** Opens a pull request, or returns the open one for that branch. */
   pullRequest(fullName: string, pr: PullRequestInput): Promise<string>;
+  /** Comments left on a pull request, given its web URL, oldest first. */
+  reviewComments(fullName: string, pullRequestUrl: string): Promise<ReviewComment[]>;
+}
+
+/** The pull request number in its web URL (".../pull/12", ".../pull-requests/12"). */
+export function pullRequestNumber(url: string): number {
+  const m = /\/pull(?:-requests)?\/(\d+)/.exec(url);
+  if (!m) throw new Error(`Not a pull request URL: ${url}`);
+  return Number(m[1]);
 }
 
 export interface PullRequestInput {
@@ -76,6 +87,35 @@ export class GitHubProvider implements GitProvider {
 
   gitAuth() {
     return { username: "x-access-token", password: this.token.trim() };
+  }
+
+  async reviewComments(fullName: string, pullRequestUrl: string): Promise<ReviewComment[]> {
+    const n = pullRequestNumber(pullRequestUrl);
+    type Gh = {
+      user?: { login: string } | null;
+      author_association?: string;
+      body?: string | null;
+      path?: string;
+      line?: number | null;
+      created_at?: string;
+      submitted_at?: string;
+    };
+    const [inline, reviews, general] = await Promise.all([
+      this.call<Gh[]>("GET", `/repos/${fullName}/pulls/${n}/comments?per_page=100`),
+      this.call<Gh[]>("GET", `/repos/${fullName}/pulls/${n}/reviews?per_page=100`),
+      this.call<Gh[]>("GET", `/repos/${fullName}/issues/${n}/comments?per_page=100`),
+    ]);
+    const at = (c: Gh) => c.created_at ?? c.submitted_at ?? "";
+    return [...inline, ...reviews, ...general]
+      .filter((c) => c.body?.trim())
+      .sort((a, b) => at(a).localeCompare(at(b)))
+      .map((c) => ({
+        author: c.user?.login ?? "someone",
+        body: c.body!,
+        path: c.path,
+        line: c.line ?? undefined,
+        trusted: isTrustedAuthor(c.author_association),
+      }));
   }
 
   async pullRequest(fullName: string, pr: PullRequestInput): Promise<string> {
@@ -215,6 +255,31 @@ export class BitbucketProvider implements GitProvider {
 
   async repo(fullName: string): Promise<RepoSummary> {
     return bitbucketRepo(await this.call<BbRepo>("GET", `/repositories/${fullName}`));
+  }
+
+  async reviewComments(fullName: string, pullRequestUrl: string): Promise<ReviewComment[]> {
+    const id = pullRequestNumber(pullRequestUrl);
+    type Bb = {
+      deleted?: boolean;
+      user?: { display_name?: string; nickname?: string };
+      content?: { raw?: string };
+      inline?: { path?: string; to?: number | null; from?: number | null };
+    };
+    // Bitbucket gives no author role: on a private repository only members can comment,
+    // on a public one anyone with an account can, so none of those reach an agent.
+    const [repo, comments] = await Promise.all([
+      this.repo(fullName),
+      this.pages<Bb>(`/repositories/${fullName}/pullrequests/${id}/comments?pagelen=100`),
+    ]);
+    return comments
+      .filter((c) => !c.deleted && c.content?.raw?.trim())
+      .map((c) => ({
+        author: c.user?.display_name ?? c.user?.nickname ?? "someone",
+        body: c.content!.raw!,
+        path: c.inline?.path,
+        line: c.inline?.to ?? c.inline?.from ?? undefined,
+        trusted: repo.private,
+      }));
   }
 
   gitAuth() {

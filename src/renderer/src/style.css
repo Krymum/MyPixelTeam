@@ -681,3 +681,10 @@ button.waiting {
   border-left: 3px solid #f2c94c;
   background: #33301e;
 }
+
+.continue-box {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}

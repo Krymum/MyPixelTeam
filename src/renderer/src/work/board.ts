@@ -404,6 +404,7 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
   }
   if (last) box.append(runSummary(last));
   const project = activeProject()!;
+  if (last?.agentStarted && last.branch) box.append(continueBox(last));
   const trustKey = `${project.id}:${issue.key}`;
   const start = button(
     last ? "▶ Put an agent on it again" : "▶ Put an agent on it",
@@ -454,6 +455,56 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
       ),
     );
   box.append(branchPicker(project.id, issue, trustKey), start, status);
+}
+
+/** Instructions being typed for a continuation, by run id (runs redraw this box). */
+const continueDrafts = new Map<string, { text: string; review: boolean }>();
+
+/**
+ * Picks the last run's session up again, on its branch: a follow-up instruction, and the
+ * pull request's review comments when there is a pull request.
+ */
+function continueBox(last: RunView): HTMLElement {
+  const box = el("div", undefined, "continue-box");
+  const draft = continueDrafts.get(last.id) ?? { text: "", review: Boolean(last.pullRequestUrl) };
+  const status = el("p", "", "status");
+  const text = textarea(draft.text, 3);
+  text.placeholder = last.pullRequestUrl
+    ? "e.g. Apply the review comments, then rerun the tests"
+    : "e.g. Also handle the empty list case";
+  text.addEventListener("input", () => {
+    draft.text = text.value;
+    continueDrafts.set(last.id, draft);
+  });
+  const review = input("", "", "checkbox");
+  review.checked = draft.review;
+  review.addEventListener("change", () => {
+    draft.review = review.checked;
+    continueDrafts.set(last.id, draft);
+  });
+  const reviewLabel = el("label", undefined, "check");
+  reviewLabel.append(review, " Pass on the pull request's review comments");
+  const go = button(
+    "Continue",
+    () =>
+      void busy(go, status, async () => {
+        await api().continueRun(last.id, text.value, {
+          includeReview: Boolean(last.pullRequestUrl) && review.checked,
+        });
+        continueDrafts.delete(last.id);
+      }),
+    "primary",
+  );
+  box.append(
+    field(
+      "Continue where the agent left off",
+      text,
+      `Same session and branch (${last.branch}): the agent remembers what it did.`,
+    ),
+  );
+  if (last.pullRequestUrl) box.append(reviewLabel);
+  box.append(go, status);
+  return box;
 }
 
 /**
@@ -520,6 +571,8 @@ function runSummary(run: RunView): HTMLElement {
   );
   if (run.costUsd !== undefined) head.append(el("span", `$${run.costUsd.toFixed(2)}`, "muted"));
   div.append(head);
+  if (run.continuedFrom)
+    div.append(el("div", `↳ continued: ${run.instruction ?? "the review comments"}`, "muted pre"));
   if (run.pullRequestUrl) div.append(link("Pull request", run.pullRequestUrl));
   if (run.error) div.append(el("div", run.error, "bad pre"));
   const lastLine = run.log.at(-1);
