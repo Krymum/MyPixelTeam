@@ -1,6 +1,7 @@
 import { MAP_H, MAP_W, TILE, ZONES } from "../../shared/engine/office-map";
 import type { AgentRecord } from "../../shared/engine/office-state";
 import { OfficeSimulation, type Activity, type Actor } from "../../shared/engine/simulation";
+import { logoSvg } from "./logo";
 import { renderPanel } from "./panel";
 import { drawBackground, SCENERY, type Drawable } from "./scenery";
 import { FRAME_H, FRAME_W } from "./sprites/character-art";
@@ -24,6 +25,7 @@ const ctx = canvas.getContext("2d")!;
 const panel = document.querySelector<HTMLElement>("#panel")!;
 const serverStatus = document.querySelector<HTMLElement>("#server-status")!;
 const agentCount = document.querySelector<HTMLElement>("#agent-count")!;
+document.querySelector("#brand")!.prepend(logoSvg());
 const projectSelect = document.querySelector<HTMLSelectElement>("#project-select")!;
 const machineWarning = document.querySelector<HTMLButtonElement>("#machine-warning")!;
 const waitingAgents = document.querySelector<HTMLButtonElement>("#waiting-agents")!;
@@ -249,35 +251,39 @@ function refreshChrome(): void {
     },
     run && { view: run, openIssue: () => void showIssue(run.projectId, run.issueKey) },
   );
-  agentCount.textContent = `${Object.keys(agents).length} agent(s)`;
+  const count = Object.keys(agents).length;
+  agentCount.textContent = `${count} agent${count === 1 ? "" : "s"} in the office`;
 }
 
 async function refreshStatus(): Promise<void> {
   const info = await window.office.info();
   const parts: HTMLElement[] = [];
   const status = document.createElement("span");
-  status.className = info.listening ? "ok" : "bad";
+  status.className = info.listening ? "lamp ok" : "lamp bad";
   status.textContent = info.listening
-    ? `● listening on ${info.url}`
-    : `● server down: ${info.error ?? "unknown error"}`;
+    ? "Listening"
+    : `Signals off: ${info.error ?? "unknown error"}`;
+  status.title = info.listening
+    ? `Claude Code sessions report to ${info.url}`
+    : "The office can't hear Claude Code sessions";
   parts.push(status);
   if (info.demo) {
     const badge = document.createElement("span");
     badge.className = "badge";
-    badge.textContent = "DEMO";
+    badge.textContent = "Demo";
     parts.push(badge);
   }
   if (info.transcripts) {
     const badge = document.createElement("span");
     badge.className = "badge";
-    badge.textContent = "ALL CLAUDE SESSIONS";
+    badge.textContent = "All Claude sessions";
     badge.title = `Following transcripts in ${info.transcripts}`;
     parts.push(badge);
   }
   if (info.configError) {
     const warn = document.createElement("span");
     warn.className = "bad";
-    warn.textContent = " ⚠ office.config.json ignored (see terminal)";
+    warn.textContent = "office.config.json ignored (see terminal)";
     warn.title = info.configError;
     parts.push(warn);
   }
@@ -304,7 +310,7 @@ function renderMachineWarning(): void {
   const problem = env && [env.git, env.claude, env.claudeAuth].find((c) => !c.ok);
   machineWarning.hidden = !problem;
   if (!problem) return;
-  machineWarning.textContent = `⚠ Agents can't run: ${problem.detail}`;
+  machineWarning.textContent = `Agents can't run: ${problem.detail}`;
   machineWarning.title = "Open the setup guide";
 }
 
@@ -327,7 +333,7 @@ function initWork(): void {
     renderMachineWarning();
     const waiting = waitingRuns(work.runs).length;
     waitingAgents.hidden = waiting === 0;
-    waitingAgents.textContent = `✋ ${waiting} agent${waiting > 1 ? "s" : ""} waiting for you`;
+    waitingAgents.textContent = `${waiting} agent${waiting > 1 ? "s" : ""} waiting for you`;
     // Deleting or creating the first project changes the active one.
     if (activeProject()?.id !== shownProject) {
       shownProject = activeProject()?.id;

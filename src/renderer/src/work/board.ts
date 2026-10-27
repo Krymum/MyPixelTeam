@@ -130,7 +130,7 @@ function renderList(): void {
   const done = input("", "", "checkbox");
   done.checked = query.includeDone;
   const doneLabel = el("label", undefined, "check");
-  doneLabel.append(done, " done too");
+  doneLabel.append(done, " Show done");
   const list = el("ul", undefined, "issues");
 
   const load = () =>
@@ -154,9 +154,9 @@ function renderList(): void {
   toolbar.append(
     search,
     doneLabel,
-    button("↻", load),
+    Object.assign(button("↻", load), { title: "Reload the tickets" }),
     button(
-      "+ New",
+      "New ticket",
       () => {
         view = { kind: "create" };
         render();
@@ -165,7 +165,7 @@ function renderList(): void {
     ),
   );
   body().replaceChildren(
-    el("h3", `${project.name} · ${trackerLabel(project.tracker)}`),
+    heading(project.name, trackerLabel(project.tracker)),
     toolbar,
     status,
     list,
@@ -174,18 +174,25 @@ function renderList(): void {
   else load();
 }
 
+/** The project's name, with where its tickets come from beside it. */
+function heading(name: string, source: string): HTMLElement {
+  const h = el("h3", name, "with-source");
+  h.append(el("span", source, "source"));
+  return h;
+}
+
 function issueRow(issue: IssueSummary): HTMLElement {
   const li = el("li");
   li.tabIndex = 0;
   const run = runsOf(issue.key).find(isActiveRun);
   const head = el("div", undefined, "issue-head");
   head.append(
-    el("strong", issue.key),
+    el("strong", issue.key, "key"),
     pill(issue.status, issue.statusCategory),
     el("span", issue.type, "muted"),
   );
-  if (run) head.append(el("span", "● agent", "agent-tag"));
-  li.append(head, el("div", issue.summary));
+  if (run) head.append(el("span", "Agent on it", "agent-tag lamp"));
+  li.append(head, el("div", issue.summary, "issue-title"));
   if (issue.assignee) li.append(el("div", issue.assignee, "muted"));
   const open = () => {
     view = { kind: "issue", key: issue.key };
@@ -566,7 +573,7 @@ function runSummary(run: RunView): HTMLElement {
   const div = el("div", undefined, "run-summary");
   const head = el("div", undefined, "issue-head");
   head.append(
-    el("span", run.status, `run-status ${run.status}`),
+    el("span", run.status[0]!.toUpperCase() + run.status.slice(1), `run-status ${run.status}`),
     el("span", formatDuration((run.endedAt ?? Date.now()) - run.startedAt), "muted"),
   );
   if (run.costUsd !== undefined) head.append(el("span", `$${run.costUsd.toFixed(2)}`, "muted"));
@@ -647,7 +654,8 @@ function renderAgents(): void {
       card.append(title, runSummary(run));
       const questions = questionsBox(run);
       if (questions) card.append(questions);
-      if (run.branch) card.append(el("div", run.branch, "muted"));
+      if (run.branch)
+        card.append(Object.assign(el("div", run.branch, "muted branch"), { title: run.branch }));
       const actions = el("div", undefined, "actions");
       const status = el("p", "", "status");
       if (isActiveRun(run)) {
