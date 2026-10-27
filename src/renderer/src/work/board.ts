@@ -34,6 +34,8 @@ const confirmedUntrusted = new Set<string>();
 const branchLookups = new Map<string, Promise<TicketBranches>>();
 /** Branch picked for the next run ("" = the app's new branch), by "<project>:<key>". */
 const chosenBranch = new Map<string, string>();
+/** Whether each project's repository has a CLAUDE.md, looked up once per launch. */
+const guides = new Map<string, Promise<boolean>>();
 /** Model picked for the next run, by "<project>:<key>". */
 const chosenModel = new Map<string, string>();
 
@@ -167,12 +169,15 @@ function renderList(): void {
       "primary",
     ),
   );
+  const guide = el("div");
   body().replaceChildren(
     heading(project.name, trackerLabel(project.tracker)),
+    guide,
     toolbar,
     status,
     list,
   );
+  void guideOffer(project.id).then((offer) => offer && guide.replaceChildren(offer));
   if (issues) showIssues();
   else load();
 }
@@ -635,6 +640,46 @@ function usageLine(): HTMLElement {
   line.title =
     "API-equivalent cost reported by Claude Code. On a subscription it is the share of your quota.";
   return line;
+}
+
+/**
+ * Offered while the repository has no CLAUDE.md: without one, every agent spends its first
+ * minutes rediscovering the code.
+ */
+async function guideOffer(projectId: string): Promise<HTMLElement | undefined> {
+  if (!guides.has(projectId))
+    guides.set(
+      projectId,
+      api()
+        .agentGuide(projectId)
+        .catch(() => true),
+    );
+  if (await guides.get(projectId)) return undefined;
+  const card = el("div", undefined, "card guide-offer");
+  const status = el("p", "", "status");
+  const go = button(
+    "Have an agent write it",
+    () =>
+      void busy(go, status, async () => {
+        const key = await api().prepareProject(projectId);
+        guides.set(projectId, Promise.resolve(true));
+        issues = undefined;
+        view = { kind: "issue", key };
+        render();
+      }),
+    "primary",
+  );
+  card.append(
+    el("strong", "No CLAUDE.md in this repository"),
+    el(
+      "p",
+      "Every agent starts by rediscovering the code, on every ticket. A short map of the project (layout, commands, conventions) lets them start right away and spend less.",
+      "muted",
+    ),
+    go,
+    status,
+  );
+  return card;
 }
 
 function renderCreate(): void {

@@ -73,6 +73,8 @@ export const WORK_CALLS = [
   "ticketBranches",
   "startRun",
   "cancelRun",
+  "agentGuide",
+  "prepareProject",
   "answerQuestion",
   "continueRun",
 ] as const;
@@ -152,6 +154,10 @@ export interface WorkApi {
   /** Puts an agent on the ticket. */
   startRun(projectId: string, issueKey: string, options?: StartRunOptions): Promise<RunView>;
   cancelRun(id: string): Promise<void>;
+  /** The repository has a CLAUDE.md or AGENTS.md on its base branch. */
+  agentGuide(projectId: string): Promise<boolean>;
+  /** Opens (or finds) the ticket asking for a CLAUDE.md and puts an agent on it; its key. */
+  prepareProject(projectId: string): Promise<string>;
   /**
    * Allows or refuses what an agent asked; "always" also allows the same for the rest of
    * the run. A refusal's message reaches the agent.
