@@ -150,6 +150,35 @@ export function readStreamLine(raw: string, cwd?: string): StreamUpdate {
   return {};
 }
 
+/** Claude Code stopped because the account's session or weekly limit is used up. */
+export const isUsageLimit = (text: string): boolean => /hit your .*limit|usage limit/i.test(text);
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/**
+ * When the limit resets, from "resets 8:40pm (Europe/Paris)" or "resets Nov 3, 9am", read
+ * in this machine's time zone. A time without a date is the next one to come.
+ */
+export function resetTime(text: string, now = new Date()): number | undefined {
+  const match =
+    /resets\s+(?:([a-z]{3})[a-z]*\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)/i.exec(
+      text,
+    );
+  if (!match) return undefined;
+  const [, month, day, hours, minutes, half] = match;
+  const at = new Date(now);
+  at.setHours(
+    (Number(hours) % 12) + (half!.toLowerCase() === "pm" ? 12 : 0),
+    Number(minutes ?? 0),
+    0,
+    0,
+  );
+  const monthIndex = month ? MONTHS.indexOf(month.toLowerCase()) : -1;
+  if (monthIndex >= 0) at.setMonth(monthIndex, Number(day));
+  else if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
+  return at.getTime();
+}
+
 /** `reference` points at the ticket: a Jira link, or "Closes #12". */
 export function pullRequestBody(reference: string, result: string): string {
   return [

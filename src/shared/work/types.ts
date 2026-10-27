@@ -67,6 +67,20 @@ export const isIssueKey = (key: string): boolean => /^([A-Z][A-Z0-9_]+-\d+|#\d+)
 /** Issue key safe in branch and folder names: "#12" -> "issue-12". */
 export const issueSlug = (key: string): string => key.replace(/^#/, "issue-");
 
+/** Claude model aliases offered for agents, cheapest last. */
+export const AGENT_MODELS = [
+  ["sonnet", "Sonnet"],
+  ["opus", "Opus"],
+  ["haiku", "Haiku"],
+] as const;
+/** Most tickets don't need Opus, which costs several times more. */
+export const DEFAULT_MODEL = "sonnet";
+export const MODEL_PATTERN = /^[\w.:[\]-]*$/;
+
+/** The model an agent on this project uses unless the ticket's run picks another. */
+export const projectModel = (project: Pick<Project, "agent">): string =>
+  project.agent.model?.trim() || DEFAULT_MODEL;
+
 const ProjectFields = z
   .object({
     id: z.string().min(1),
@@ -89,11 +103,11 @@ const ProjectFields = z
       .optional(),
     agent: z.object({
       permissionMode: z.enum(PERMISSION_MODES).default("acceptEdits"),
-      /** Claude model alias or name; Claude Code's default when empty. */
+      /** Claude model alias or name; DEFAULT_MODEL when empty. */
       model: z
         .string()
         .max(100)
-        .regex(/^[\w.:[\]-]*$/, "Model: letters, digits and . - _ : [ ] only")
+        .regex(MODEL_PATTERN, "Model: letters, digits and . - _ : [ ] only")
         .optional(),
       /** Appended to every ticket prompt, e.g. "run npm test before finishing". */
       instructions: z.string().max(4000).optional(),
@@ -116,6 +130,8 @@ export type Project = z.infer<typeof Project>;
 /** Sent by the settings dialog; the id is assigned on creation. */
 export type ProjectInput = Omit<Project, "id"> & { id?: string };
 
+export const MAX_AGENTS = 8;
+
 export const Workspace = z.object({
   projects: z.array(Project).default([]),
   activeProjectId: z.string().optional(),
@@ -123,6 +139,8 @@ export const Workspace = z.object({
   onboarded: z.boolean().default(false),
   /** Desktop notifications when an agent finishes, fails or waits for you. */
   notifications: z.boolean().default(true),
+  /** Agents working at the same time; the next tickets wait their turn. */
+  maxAgents: z.number().int().min(1).max(MAX_AGENTS).default(2),
 });
 export type Workspace = z.infer<typeof Workspace>;
 
@@ -254,13 +272,16 @@ export interface IssueChanges {
   description?: string;
 }
 
-export type RunStatus = "preparing" | "running" | "publishing" | "done" | "failed" | "cancelled";
+export type RunStatus =
+  "queued" | "preparing" | "running" | "publishing" | "done" | "failed" | "cancelled";
 
 export interface StartRunOptions {
   /** Run on an issue from an untrusted author, after the person read it. */
   allowUntrusted?: boolean;
   /** Work on this existing branch from origin instead of a new one from the base. */
   branch?: string;
+  /** Claude model for this run; the project's otherwise. */
+  model?: string;
 }
 
 /** Where an agent can work on a ticket. */
@@ -348,10 +369,17 @@ export interface RunView {
   /** This run resumed the session of that run, with `instruction`. */
   continuedFrom?: string;
   instruction?: string;
+  /** Claude model the agent runs on. */
+  model?: string;
+  /** Stopped by the Claude usage limit: the agent picks the ticket up again at this time. */
+  resumeAt?: number;
 }
 
 export const isActiveRun = (run: RunView): boolean =>
-  run.status === "preparing" || run.status === "running" || run.status === "publishing";
+  run.status === "queued" ||
+  run.status === "preparing" ||
+  run.status === "running" ||
+  run.status === "publishing";
 
 /** The branch new work starts from. */
 export const baseBranchOf = (project: Pick<Project, "baseBranch" | "repo">): string =>

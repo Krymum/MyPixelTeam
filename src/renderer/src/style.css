@@ -168,6 +168,10 @@ h4 {
   color: var(--bad);
 }
 
+.wait {
+  color: var(--wait);
+}
+
 .badge {
   padding: 1px 8px;
   border-radius: 999px;
@@ -607,6 +611,11 @@ h3 .source {
   color: var(--ok);
 }
 
+.run-status.queued {
+  background: var(--tint-wait);
+  color: var(--wait);
+}
+
 .run-status.failed {
   background: var(--tint-bad);
   color: var(--bad);
@@ -643,6 +652,17 @@ h3 .source {
 .inline input {
   flex: 1;
   min-width: 0;
+}
+
+.usage {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 2px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  margin-bottom: 10px;
+  font-size: 13px;
 }
 
 .card {

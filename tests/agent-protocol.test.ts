@@ -70,7 +70,9 @@ describe("buildPrompt", () => {
     expect(epic).toContain("Do not create them again.");
     const part = buildPrompt({ ...child, parent: issue }, project, where);
     expect(part).toContain("belongs to the epic PROJ-7 (Add dark mode)");
-    expect(buildPrompt(issue, project, where)).not.toMatch(/This ticket is an epic|belongs to the epic/);
+    expect(buildPrompt(issue, project, where)).not.toMatch(
+      /This ticket is an epic|belongs to the epic/,
+    );
   });
 
   it("tells the agent to build on an existing branch", () => {

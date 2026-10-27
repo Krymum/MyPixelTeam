@@ -1,4 +1,5 @@
 import {
+  MAX_AGENTS,
   trackerLabel,
   type GitProviderId,
   type JiraProject,
@@ -12,6 +13,7 @@ import { busy, button, el, field, input, select, textarea } from "../dom";
 import { accountCard, PROVIDER_NAMES } from "./accounts-ui";
 import { discoveryPanel } from "./discovery";
 import { hooksCard } from "./hooks-ui";
+import { MODEL_HINT, modelSelect } from "./model-ui";
 import { connected, update, work } from "./store";
 import { parseTracker, trackerOptions, trackerValue } from "./tracker-ui";
 import { openWelcome } from "./welcome";
@@ -136,11 +138,28 @@ function preferencesSection(): HTMLElement {
   });
   const label = el("label", undefined, "check");
   label.append(notify, " Notify me when an agent finishes, fails or waits for me");
+  const agents = select(
+    Array.from({ length: MAX_AGENTS }, (_, i): [string, string] => [String(i + 1), String(i + 1)]),
+    String(work.workspace.maxAgents),
+  );
+  agents.addEventListener("change", async () => {
+    update({ workspace: await api().setPreferences({ maxAgents: Number(agents.value) }) });
+  });
   const guide = button("Open the setup guide", () => {
     dialog.close();
     openWelcome();
   });
-  section.append(el("h3", "Preferences"), label, hooksCard(), guide);
+  section.append(
+    el("h3", "Preferences"),
+    field(
+      "Agents working at once",
+      agents,
+      "More tickets wait their turn. Every agent draws on the same Claude quota, so several at once reach its limit sooner.",
+    ),
+    label,
+    hooksCard(),
+    guide,
+  );
   return section;
 }
 
@@ -173,7 +192,7 @@ function projectEditor(project: Project | null): HTMLElement {
     Object.entries(PERMISSION_LABELS) as [string, string][],
     project?.agent.permissionMode ?? "acceptEdits",
   );
-  const model = input(project?.agent.model ?? "", "Claude Code's default (e.g. opus, sonnet)");
+  const model = modelSelect(project?.agent.model);
   const instructions = textarea(project?.agent.instructions ?? "", 4);
   instructions.placeholder = "e.g. Run npm test before finishing. Write commit-ready code.";
   const openPr = input("", "", "checkbox");
@@ -260,7 +279,7 @@ function projectEditor(project: Project | null): HTMLElement {
           baseBranch: baseBranch.value.trim() || undefined,
           agent: {
             permissionMode: mode.value as PermissionMode,
-            model: model.value.trim() || undefined,
+            model: model.value,
             instructions: instructions.value.trim() || undefined,
             openPullRequest: openPr.checked,
           },
@@ -310,7 +329,7 @@ function projectEditor(project: Project | null): HTMLElement {
       mode,
       "What the mode doesn't allow on its own, the agent asks you in the office: its character raises its hand and the ticket shows Allow / Deny.",
     ),
-    field("Model", model),
+    field("Model", model, `${MODEL_HINT} Each ticket can pick another one.`),
     field("Instructions for every ticket", instructions),
     prLabel,
     actions,

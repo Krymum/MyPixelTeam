@@ -8,6 +8,8 @@ import {
   isActiveRun,
   isIssueKey,
   issueSlug,
+  MODEL_PATTERN,
+  projectModel,
   type AgentQuestion,
   type IssueDetail,
   type ContinueOptions,
@@ -22,11 +24,13 @@ import {
   buildContinuePrompt,
   buildPrompt,
   describeRequest,
+  isUsageLimit,
   permissionResponse,
   promptMessage,
   pullRequestBody,
   readPermissionRequest,
   readStreamLine,
+  resetTime,
   unsupportedResponse,
   type PermissionRequest,
   type ReviewComment,
@@ -79,6 +83,10 @@ const LOG_LIMIT = 200;
 /** Agents log a lot: the renderer gets at most a few updates per second. */
 const CHANGE_THROTTLE_MS = 250;
 const RUN_LIMIT = 50;
+/** When the usage limit message doesn't say when it resets. */
+const LIMIT_FALLBACK_MS = 60 * 60 * 1000;
+const RESUME_INSTRUCTION =
+  "The Claude usage limit stopped you before you finished. Pick the ticket up where you left off: your changes so far are still in the worktree.";
 
 class Cancelled extends Error {}
 
@@ -87,15 +95,32 @@ type Plan =
   | { kind: "new"; options: StartRunOptions }
   | { kind: "continue"; instruction: string; includeReview: boolean };
 
+/** A run waiting for a free desk, with what it will do once it gets one. */
+interface Waiting {
+  project: Project;
+  plan: Plan;
+  /** Goes before the others: an agent picking up its ticket after the usage limit. */
+  first: boolean;
+}
+
 export class AgentRunner {
   private readonly runs = new Map<string, RunView>();
   private readonly children = new Map<string, ChildProcess>();
   /** Permission requests waiting for an answer, by run then question id. */
   private readonly requests = new Map<string, Map<string, PermissionRequest>>();
+  private readonly waiting = new Map<string, Waiting>();
+  /** Set when the Claude usage limit stopped an agent: no other agent starts before then. */
+  private pausedUntil = 0;
   private changeTimer?: NodeJS.Timeout;
+  private resumeTimer?: NodeJS.Timeout;
 
   constructor(private readonly options: RunnerOptions) {
     for (const run of loadHistory(options.historyPath)) this.runs.set(run.id, run);
+    const resumes = [...this.runs.values()].flatMap((r) => (r.resumeAt ? [r.resumeAt] : []));
+    if (resumes.length) {
+      this.pausedUntil = Math.max(...resumes);
+      this.scheduleResume();
+    }
   }
 
   list(): RunView[] {
@@ -112,16 +137,19 @@ export class AgentRunner {
     const project = this.options.workspace.get(projectId);
     const busy = [...this.runs.values()].find((r) => r.issueKey === issueKey && isActiveRun(r));
     if (busy) throw new Error(`An agent is already on ${issueKey}`);
+    const model = options.model?.trim();
+    if (model && !MODEL_PATTERN.test(model)) throw new Error(`Not a model name: ${model}`);
     const run: RunView = {
       id: randomUUID(),
       projectId,
       issueKey,
       issueSummary: "",
       sessionId: randomUUID(),
-      status: "preparing",
+      status: "queued",
       branch: "",
       worktree: join(this.options.worktreesDir, projectId, issueSlug(issueKey)),
       startedAt: Date.now(),
+      model: model || projectModel(project),
       log: [],
     };
     return this.launch(run, project, { kind: "new", options });
@@ -131,7 +159,12 @@ export class AgentRunner {
    * Resumes the agent's session of an earlier run, on the same branch and worktree, with a
    * new instruction and, if asked, the pull request's review comments.
    */
-  continueRun(previousRunId: string, instruction: string, options: ContinueOptions = {}): RunView {
+  continueRun(
+    previousRunId: string,
+    instruction: string,
+    options: ContinueOptions = {},
+    first = false,
+  ): RunView {
     const previous = this.runs.get(previousRunId);
     if (!previous) throw new Error("Unknown run");
     if (!previous.agentStarted || !previous.branch)
@@ -146,42 +179,87 @@ export class AgentRunner {
     );
     if (busy) throw new Error(`An agent is already on ${previous.issueKey}`);
     const project = this.options.workspace.get(previous.projectId);
+    // Continued by hand: no need to pick it up after the usage limit as well.
+    previous.resumeAt = undefined;
     const run: RunView = {
       id: randomUUID(),
       projectId: previous.projectId,
       issueKey: previous.issueKey,
       issueSummary: previous.issueSummary,
       sessionId: previous.sessionId,
-      status: "preparing",
+      status: "queued",
       branch: previous.branch,
       worktree: previous.worktree,
       startedAt: Date.now(),
       pullRequestUrl: previous.pullRequestUrl,
       continuedFrom: previous.id,
       instruction: instruction.trim() || undefined,
+      model: previous.model ?? projectModel(project),
       log: [],
     };
-    return this.launch(run, project, {
-      kind: "continue",
-      instruction,
-      includeReview: Boolean(options.includeReview),
-    });
+    return this.launch(
+      run,
+      project,
+      { kind: "continue", instruction, includeReview: Boolean(options.includeReview) },
+      first,
+    );
   }
 
-  private launch(run: RunView, project: Project, plan: Plan): RunView {
+  /** Queues the run; it starts right away when a desk is free. */
+  private launch(run: RunView, project: Project, plan: Plan, first = false): RunView {
     this.runs.set(run.id, run);
+    this.waiting.set(run.id, { project, plan, first });
     this.trim();
+    this.drain();
+    if (run.status === "queued")
+      this.log(
+        run,
+        this.pausedUntil > Date.now()
+          ? `waiting for the Claude usage limit to reset at ${clock(this.pausedUntil)}`
+          : "waiting: other agents are working",
+      );
     this.changed();
-    void this.execute(run, project, plan).catch((err) => {
-      const cancelled = err instanceof Cancelled || run.status === "cancelled";
-      this.finish(run, cancelled ? "cancelled" : "failed", cancelled ? undefined : err);
-    });
     return run;
   }
 
+  /** Starts waiting runs while fewer agents than allowed are working, resumed ones first. */
+  drain(): void {
+    if (this.pausedUntil > Date.now()) return;
+    const limit = this.options.workspace.view().maxAgents;
+    while (this.working() < limit) {
+      const next =
+        [...this.waiting].find(([, w]) => w.first) ?? this.waiting.entries().next().value;
+      if (!next) return;
+      const [id, { project, plan }] = next;
+      this.waiting.delete(id);
+      const run = this.runs.get(id)!;
+      run.status = "preparing";
+      run.startedAt = Date.now();
+      this.changed();
+      void this.execute(run, project, plan).catch((err) => {
+        const cancelled = err instanceof Cancelled || run.status === "cancelled";
+        this.finish(run, cancelled ? "cancelled" : "failed", cancelled ? undefined : err);
+      });
+    }
+  }
+
+  private working(): number {
+    return [...this.runs.values()].filter((r) => isActiveRun(r) && r.status !== "queued").length;
+  }
+
+  /** Stops a run, takes it out of the queue, or stops it picking its ticket up again. */
   cancel(id: string): void {
     const run = this.runs.get(id);
+    if (run?.resumeAt && !isActiveRun(run)) {
+      run.resumeAt = undefined;
+      this.log(run, "will not pick the ticket up again");
+      return;
+    }
     if (!run || !isActiveRun(run)) return;
+    if (this.waiting.delete(id)) {
+      this.log(run, "taken out of the queue");
+      return this.finish(run, "cancelled");
+    }
     run.status = "cancelled";
     this.log(run, "cancelled");
     const child = this.children.get(id);
@@ -191,7 +269,8 @@ export class AgentRunner {
 
   /** On quit: agents must not keep running without the app watching them. */
   stopAll(): void {
-    for (const run of this.runs.values()) this.cancel(run.id);
+    clearTimeout(this.resumeTimer);
+    for (const run of this.runs.values()) if (isActiveRun(run)) this.cancel(run.id);
     this.save();
   }
 
@@ -298,6 +377,10 @@ export class AgentRunner {
     this.check(run);
     run.result = result.text;
     run.costUsd = result.costUsd;
+    if (result.isError && isUsageLimit(result.text)) {
+      const at = this.pause(run, result.text);
+      throw new Error(`${result.text}. The agent picks the ticket up again at ${clock(at)}.`);
+    }
     if (result.isError) throw new Error(result.text || "The agent stopped with an error");
 
     run.status = "publishing";
@@ -340,6 +423,39 @@ export class AgentRunner {
     await this.move(run, tracker, "review");
     await this.note(run, tracker, report(run.pullRequestUrl));
     this.finish(run, "done");
+  }
+
+  /**
+   * The usage limit stopped the agent: nothing else starts before the limit resets, and then
+   * the agent resumes its session. Agents already working stop on the limit by themselves.
+   */
+  private pause(run: RunView, text: string): number {
+    const at = resetTime(text) ?? Date.now() + LIMIT_FALLBACK_MS;
+    run.resumeAt = at;
+    this.pausedUntil = Math.max(this.pausedUntil, at);
+    this.scheduleResume();
+    return at;
+  }
+
+  private scheduleResume(): void {
+    clearTimeout(this.resumeTimer);
+    // A little after the reset, and not before the app has settled when it was due already.
+    const delay = Math.max(this.pausedUntil - Date.now() + 30_000, 10_000);
+    this.resumeTimer = setTimeout(() => this.resume(), delay);
+  }
+
+  private resume(): void {
+    this.pausedUntil = 0;
+    for (const run of [...this.runs.values()]) {
+      if (!run.resumeAt) continue;
+      run.resumeAt = undefined;
+      try {
+        this.continueRun(run.id, RESUME_INSTRUCTION, {}, true);
+      } catch (err) {
+        this.log(run, `could not pick the ticket up again: ${message(err)}`);
+      }
+    }
+    this.drain();
   }
 
   /** A comment on the run's ticket; a failure is logged, not fatal. */
@@ -428,7 +544,7 @@ export class AgentRunner {
       "--permission-prompt-tool",
       "stdio",
     ];
-    if (project.agent.model) args.push("--model", project.agent.model);
+    args.push("--model", run.model ?? projectModel(project));
 
     // Started from inside a Claude Code session (dev), these would confuse the child.
     const env = { ...process.env };
@@ -560,6 +676,7 @@ export class AgentRunner {
     }
     this.changed();
     this.options.onFinished?.(run);
+    this.drain();
   }
 
   private log(run: RunView, line: string): void {
@@ -624,6 +741,9 @@ export function loadHistory(path: string | undefined): RunView[] {
 }
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+const clock = (at: number): string =>
+  new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /** Stops the agent and whatever commands it started. */
 function killTree(pid: number): void {

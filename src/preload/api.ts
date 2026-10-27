@@ -115,7 +115,7 @@ export interface WorkApi {
   /** The same analysis for a folder picked by hand; undefined when it is already a project. */
   inspectFolder(path: string): Promise<DiscoveredProject | undefined>;
   setPreferences(
-    prefs: Partial<Pick<Workspace, "onboarded" | "notifications">>,
+    prefs: Partial<Pick<Workspace, "onboarded" | "notifications" | "maxAgents">>,
   ): Promise<Workspace>;
   accounts(): Promise<AccountsView>;
   /** Checks the credentials, then stores them encrypted. */
