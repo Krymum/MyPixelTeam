@@ -10,6 +10,7 @@ import {
   issueSlug,
   MAX_CI_FIXES,
   MODEL_PATTERN,
+  PLAN_MODEL,
   projectModel,
   type AgentQuestion,
   type IssueDetail,
@@ -44,11 +45,14 @@ import {
   branchName,
   commitAll,
   ensureClone,
+  git,
   headCommit,
+  mergeFrom,
   prepareWorktree,
   push,
   remoteBranches,
   unpublishedCommits,
+  type GitAuth,
 } from "./git";
 import type { CiReport } from "../integrations/git-providers";
 import type { IssueTracker } from "../integrations/trackers";
@@ -56,6 +60,7 @@ import {
   createdComment,
   createTickets,
   takeTicketDrafts,
+  TICKETS_DIR,
   type CreatedTicket,
 } from "./ticket-drafts";
 import type { WorkspaceStore } from "./workspace";
@@ -230,7 +235,9 @@ export class AgentRunner {
       branch: "",
       worktree: join(this.options.worktreesDir, projectId, issueSlug(issueKey)),
       startedAt: Date.now(),
-      model: model || projectModel(project),
+      model: model || (options.planOnly ? PLAN_MODEL : projectModel(project)),
+      from: options.from,
+      planOnly: options.planOnly || undefined,
       log: [],
     };
     return this.launch(run, project, { kind: "new", options, earlier });
@@ -277,6 +284,8 @@ export class AgentRunner {
       instruction: instruction.trim() || undefined,
       model: previous.model ?? projectModel(project),
       epicKey: previous.epicKey,
+      from: previous.from,
+      planOnly: previous.planOnly,
       ciFixes: extra.ciFixes,
       log: [],
     };
@@ -494,7 +503,9 @@ export class AgentRunner {
     this.check(run);
     const startCommit = await headCommit(run.worktree);
 
-    if (issue.statusCategory !== "indeterminate") await this.move(run, tracker, "start");
+    // Breaking a ticket down is not working on it.
+    if (issue.statusCategory !== "indeterminate" && !run.planOnly)
+      await this.move(run, tracker, "start");
 
     const prompt =
       plan.kind === "new"
@@ -503,6 +514,7 @@ export class AgentRunner {
             base: start,
             existing,
             earlier: plan.earlier,
+            planOnly: run.planOnly,
           })
         : buildContinuePrompt(
             issue,
@@ -510,17 +522,20 @@ export class AgentRunner {
             run.branch,
             plan.instruction,
             plan.includeReview ? await this.review(run, project) : [],
+            run.planOnly,
           );
     run.status = "running";
     this.changed();
     await this.note(
       run,
       tracker,
-      plan.kind === "new"
-        ? `An agent started on this ticket, on the branch ${run.branch}.`
-        : run.ciFixes
-          ? `An agent is back on this ticket to fix the failing checks of its pull request (attempt ${run.ciFixes} of ${MAX_CI_FIXES}).`
-          : `An agent is back on this ticket, on the branch ${run.branch}${plan.instruction.trim() ? `:\n\n${plan.instruction.trim()}` : "."}`,
+      run.planOnly && plan.kind === "new"
+        ? "An agent is breaking this ticket into tickets."
+        : plan.kind === "new"
+          ? `An agent started on this ticket, on the branch ${run.branch}.`
+          : run.ciFixes
+            ? `An agent is back on this ticket to fix the failing checks of its pull request (attempt ${run.ciFixes} of ${MAX_CI_FIXES}).`
+            : `An agent is back on this ticket, on the branch ${run.branch}${plan.instruction.trim() ? `:\n\n${plan.instruction.trim()}` : "."}`,
     );
     try {
       await this.work(run, project, plan, issue, prompt, startCommit);
@@ -573,7 +588,7 @@ export class AgentRunner {
 
     run.status = "publishing";
     this.changed();
-    const created = await this.createTickets(run, tracker);
+    const created = await this.createTickets(run, tracker, run.planOnly ? run.issueKey : undefined);
     // What the ticket keeps of the run: the pull request, the summary, the new tickets.
     const report = (pullRequest?: string) =>
       [
@@ -586,6 +601,11 @@ export class AgentRunner {
         .filter(Boolean)
         .join("\n\n");
 
+    // A planning run changes no file: its tickets are all it hands back.
+    if (run.planOnly) {
+      await this.note(run, tracker, report());
+      return this.finish(run, "done");
+    }
     const committed = await commitAll(run.worktree, tracker.title(issue));
     if (committed) this.log(run, "changes committed");
     if (!project.agent.openPullRequest) {
@@ -599,6 +619,7 @@ export class AgentRunner {
       await this.note(run, tracker, report());
       return this.finish(run, "done");
     }
+    if (run.from) await this.bringIn(run, run.from, tracker, auth);
     await push(run.worktree, run.branch, auth);
     this.log(run, "branch pushed");
     const pushed = await headCommit(run.worktree);
@@ -617,6 +638,70 @@ export class AgentRunner {
     await this.note(run, tracker, report(run.pullRequestUrl));
     this.finish(run, "done");
     this.watchCi(run, project, pushed);
+    await this.syncDependents(run, project);
+  }
+
+  /**
+   * Merges the latest of the branch this one was built on: an epic's earlier ticket may
+   * have been fixed (review, failing checks) since. A conflict is left to the person.
+   */
+  private async bringIn(
+    run: RunView,
+    from: string,
+    tracker: IssueTracker,
+    auth: GitAuth,
+  ): Promise<boolean> {
+    const outcome = await mergeFrom(run.worktree, from, auth);
+    if (outcome === "merged") this.log(run, `brought in the latest commits of ${from}`);
+    if (outcome === "conflict") {
+      this.log(run, `${from} changed since, and merging it conflicts: left to you`);
+      await this.note(
+        run,
+        tracker,
+        `${from}, which this branch is built on, changed since, and merging it into ${run.branch} conflicts. Merge it by hand, or continue the agent asking it to merge origin/${from}.`,
+      );
+    }
+    return outcome === "merged";
+  }
+
+  /**
+   * The run pushed its branch: the epic's tickets built on it, done already, get the new
+   * commits too, so a fix made here reaches them (and the ones built on them). A ticket
+   * whose agent is still at work gets them before its own push.
+   */
+  private async syncDependents(run: RunView, project: Project): Promise<void> {
+    const tracker = this.options.accounts.tracker(project);
+    const auth = this.options.accounts.git(project.repo.provider).gitAuth();
+    const dependents = this.list().filter(
+      (r) =>
+        r.projectId === run.projectId &&
+        r.issueKey !== run.issueKey &&
+        r.from === run.branch &&
+        r.pullRequestUrl &&
+        !isActiveRun(r) &&
+        this.latest(r) === r,
+    );
+    for (const next of dependents) {
+      try {
+        if (!existsSync(join(next.worktree, ".git"))) continue;
+        const branch = await git(["branch", "--show-current"], { cwd: next.worktree });
+        if (
+          branch !== next.branch ||
+          (await git(["status", "--porcelain"], { cwd: next.worktree }))
+        )
+          continue;
+        // Up to date with its own branch on origin first: someone may have pushed to it.
+        await git(["fetch", "origin", next.branch], { cwd: next.worktree, auth });
+        await git(["merge", "--ff-only", "-q", `origin/${next.branch}`], { cwd: next.worktree });
+        if (!(await this.bringIn(next, run.branch, tracker, auth))) continue;
+        await push(next.worktree, next.branch, auth);
+        this.log(next, `pushed with the latest of ${run.branch} (${run.issueKey})`);
+        this.watchCi(next, project, await headCommit(next.worktree));
+        await this.syncDependents(next, project);
+      } catch (err) {
+        this.log(next, `could not bring in the latest of ${run.branch}: ${message(err)}`);
+      }
+    }
   }
 
   /**
@@ -731,15 +816,24 @@ export class AgentRunner {
   }
 
   /** The tickets the agent wrote to its ticket file, created with the project's account. */
-  private async createTickets(run: RunView, tracker: IssueTracker): Promise<CreatedTicket[]> {
+  private async createTickets(
+    run: RunView,
+    tracker: IssueTracker,
+    parent?: string,
+  ): Promise<CreatedTicket[]> {
     const drafts = takeTicketDrafts(run.worktree);
     if (!drafts?.length) return [];
     const created: CreatedTicket[] = [];
     try {
-      await createTickets(tracker, drafts, (t) => {
-        created.push(t);
-        this.log(run, `ticket created: ${t.key} ${t.summary}`);
-      });
+      await createTickets(
+        tracker,
+        drafts,
+        (t) => {
+          created.push(t);
+          this.log(run, `ticket created: ${t.key} ${t.summary}`);
+        },
+        parent,
+      );
     } catch (err) {
       const before = created.length
         ? ` (created before the error: ${created.map((t) => t.key).join(", ")})`
@@ -774,7 +868,7 @@ export class AgentRunner {
   private async move(run: RunView, tracker: IssueTracker, goal: "start" | "review"): Promise<void> {
     try {
       const { moved, skipped } = await tracker.advance(run.issueKey, goal);
-      this.log(run, moved ? `ticket → ${moved}` : `${skipped}: ticket left as is`);
+      this.log(run, moved ? `ticket â†’ ${moved}` : `${skipped}: ticket left as is`);
     } catch (err) {
       this.log(run, `could not move the ticket: ${message(err)}`);
     }
@@ -797,7 +891,8 @@ export class AgentRunner {
       "--name",
       run.issueKey,
       "--permission-mode",
-      project.agent.permissionMode,
+      // A planning run can't ask for more: whatever its tools don't allow is refused.
+      run.planOnly ? "dontAsk" : project.agent.permissionMode,
       // What the mode doesn't allow on its own is asked here, on stdin/stdout, and answered
       // by the person from the office. The prompt goes in as a stream-json message.
       "--input-format",
@@ -807,6 +902,9 @@ export class AgentRunner {
       "--permission-prompt-tool",
       "stdio",
     ];
+    // Reading the code, and writing the tickets file only.
+    if (run.planOnly)
+      args.push("--tools", "Read,Grep,Glob,Write", "--allowedTools", `Edit(./${TICKETS_DIR}/**)`);
     args.push("--model", run.model ?? projectModel(project));
     const budget = this.options.workspace.view().runBudgetUsd;
     if (budget > 0) {

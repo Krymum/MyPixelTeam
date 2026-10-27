@@ -9,9 +9,10 @@ import type { IssueTracker } from "../integrations/trackers";
  * it writes them to this file in its worktree, and the app creates them with the project's
  * account once the agent is done. The file is never committed.
  */
-export const TICKETS_FILE = ".mypixelteam/tickets.json";
+export const TICKETS_DIR = ".mypixelteam";
+export const TICKETS_FILE = `${TICKETS_DIR}/tickets.json`;
 
-const MAX_TICKETS = 30;
+export const MAX_TICKETS = 30;
 
 const Draft = z.object({
   summary: z.string().trim().min(1).max(250),
@@ -71,13 +72,14 @@ export interface CreatedTicket {
 }
 
 /**
- * Creates the drafts in order, epics first. `onCreated` hears of each one, so a failure
- * halfway still says what exists.
+ * Creates the drafts in order, epics first; under `parent` when given (a planning run's
+ * ticket). `onCreated` hears of each one, so a failure halfway still says what exists.
  */
 export async function createTickets(
   tracker: IssueTracker,
   drafts: TicketDrafts,
   onCreated: (ticket: CreatedTicket) => void,
+  parent?: string,
 ): Promise<CreatedTicket[]> {
   const types = pickTypes(await tracker.issueTypes());
   const created: CreatedTicket[] = [];
@@ -99,7 +101,7 @@ export async function createTickets(
   };
   for (const epic of drafts) {
     const children = epic.tickets ?? [];
-    const key = await add(epic, children.length ? types.epic : types.ticket);
+    const key = await add(epic, children.length ? types.epic : types.ticket, parent);
     for (const child of children) await add(child, types.ticket, key);
   }
   return created;

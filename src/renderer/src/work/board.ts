@@ -1,6 +1,7 @@
 import {
   isActiveRun,
   MAX_CI_FIXES,
+  PLAN_MODEL,
   isPreviewable,
   trackerLabel,
   type Attachment,
@@ -475,12 +476,36 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
     );
   const open = (issue.children ?? []).filter((c) => c.statusCategory !== "done");
   if (open.length && issue.trusted) box.append(epicBox(project.id, issue.key, open.length));
+  else if (issue.trusted) box.append(planBox(project.id, issue.key));
   box.append(
     branchPicker(project.id, issue, trustKey),
     field("Model", model, "Opus only for hard tickets: it uses the Claude quota much faster."),
     start,
     status,
   );
+}
+
+/** A cheap agent that only writes the tickets this one breaks into, under it. */
+function planBox(projectId: string, key: string): HTMLElement {
+  const box = el("div", undefined, "epic-box");
+  const status = el("p", "", "status");
+  const go = button(
+    "Break it into tickets",
+    () =>
+      void busy(go, status, async () => {
+        await api().startRun(projectId, key, { planOnly: true });
+      }),
+  );
+  box.append(
+    el(
+      "p",
+      `Too big for one agent? A ${PLAN_MODEL} agent reads the code without changing it and writes the tickets it breaks into, under ${key}. Then put agents on them one after another.`,
+      "muted",
+    ),
+    go,
+    status,
+  );
+  return box;
 }
 
 /** Puts agents on an epic's open tickets, one after another. */
@@ -633,8 +658,9 @@ function runSummary(run: RunView): HTMLElement {
     );
   if (run.ci) head.append(el("span", CI_LABELS[run.ci], `pill ci ${run.ci}`));
   div.append(head);
-  if (run.epicKey || run.ciFixes) {
+  if (run.planOnly || run.epicKey || run.ciFixes) {
     const why = [
+      run.planOnly && "Breaking the ticket into tickets",
       run.epicKey && `Part of a run through ${run.epicKey}`,
       run.ciFixes && `Fixing failing checks, attempt ${run.ciFixes} of ${MAX_CI_FIXES}`,
     ];
