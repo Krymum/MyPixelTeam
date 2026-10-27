@@ -251,10 +251,11 @@ Issues, or a Jira project), plus:
 
 - **Local folder**: an existing clone, or empty to let the app clone into
   `<user data>/repos/<host>/<owner>/<name>` on the first run.
-- **Agent permissions**: agents run unattended, so anything their mode would ask about is
-  refused. _Edit files only_ (`acceptEdits`, the default) lets them change files but not run
-  commands; _Auto mode_ lets Claude Code judge each command; _Everything_
-  (`bypassPermissions`) is for machines that are a sandbox.
+- **Agent permissions**: what the mode doesn't allow on its own, the agent asks you (see
+  [Answering agents](#answering-agents)). _Edit files, ask before commands_ (`acceptEdits`,
+  the default) changes files freely and asks before every command; _Auto mode_ lets Claude
+  Code judge each command and asks when unsure; _Everything_ (`bypassPermissions`) never
+  asks and is for machines that are a sandbox.
 - **Base branch**: where new ticket branches start and pull requests go (`develop`…);
   the repository's default branch when empty.
 - **Model** and **instructions** added to every ticket ("run npm test before finishing").
@@ -313,6 +314,18 @@ Things to know:
   `git worktree remove`.
 - Runs are kept in `runs.json` in the user data folder (the last 50, with their logs). A
   run still going when the app crashed shows as failed.
+
+### Answering agents
+
+When an agent wants to do something its permission mode doesn't allow on its own (run
+`npm test`, write outside its worktree…), it pauses and asks. Its character raises its hand
+with a `?` bubble, the top bar shows "✋ 1 agent waiting for you", and a notification comes
+up while the window is in the background. The ticket and the **Agents** tab show the exact
+command with **Allow** and **Deny**; a refusal's reason is sent to the agent, which carries
+on without it. Clicking the character links to the ticket.
+
+Behind it, agents run with `--permission-prompt-tool stdio`: Claude Code sends each request
+as a `control_request` on its output, and the app answers on its input.
 
 ### Notifications
 

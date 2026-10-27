@@ -21,8 +21,8 @@ import { openWelcome } from "./welcome";
 const api = () => window.office.work;
 
 const PERMISSION_LABELS: Record<PermissionMode, string> = {
-  acceptEdits: "Edit files only: commands are refused",
-  auto: "Auto mode: Claude Code judges each command",
+  acceptEdits: "Edit files freely, ask me before running commands",
+  auto: "Auto mode: Claude Code judges each command, asks me when unsure",
   bypassPermissions: "Everything, unchecked (sandboxed machines only)",
 };
 
@@ -308,7 +308,7 @@ function projectEditor(project: Project | null): HTMLElement {
     field(
       "Agent permissions",
       mode,
-      "Agents run unattended: anything this mode would ask about is refused.",
+      "What the mode doesn't allow on its own, the agent asks you in the office: its character raises its hand and the ticket shows Allow / Deny.",
     ),
     field("Model", model),
     field("Instructions for every ticket", instructions),

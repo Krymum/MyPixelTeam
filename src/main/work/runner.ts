@@ -8,13 +8,25 @@ import {
   isActiveRun,
   isIssueKey,
   issueSlug,
+  type AgentQuestion,
   type Project,
   type RunStatus,
   type StartRunOptions,
   type RunView,
 } from "../../shared/work/types";
 import type { AccountStore } from "./accounts";
-import { buildPrompt, pullRequestBody, readStreamLine, type StreamResult } from "./agent-protocol";
+import {
+  buildPrompt,
+  describeRequest,
+  permissionResponse,
+  promptMessage,
+  pullRequestBody,
+  readPermissionRequest,
+  readStreamLine,
+  unsupportedResponse,
+  type PermissionRequest,
+  type StreamResult,
+} from "./agent-protocol";
 import {
   branchName,
   commitAll,
@@ -46,6 +58,8 @@ export interface RunnerOptions {
   onSession: (run: RunView, phase: "started" | "ended") => void;
   /** A run reached done, failed or cancelled. */
   onFinished?: (run: RunView) => void;
+  /** The agent asked something (`question`), or an answer was given (undefined). */
+  onQuestion?: (run: RunView, question: AgentQuestion | undefined) => void;
   /** JSON file keeping the runs across restarts. */
   historyPath?: string;
 }
@@ -60,6 +74,8 @@ class Cancelled extends Error {}
 export class AgentRunner {
   private readonly runs = new Map<string, RunView>();
   private readonly children = new Map<string, ChildProcess>();
+  /** Permission requests waiting for an answer, by run then question id. */
+  private readonly requests = new Map<string, Map<string, PermissionRequest>>();
   private changeTimer?: NodeJS.Timeout;
 
   constructor(private readonly options: RunnerOptions) {
@@ -232,9 +248,14 @@ export class AgentRunner {
       run.issueKey,
       "--permission-mode",
       project.agent.permissionMode,
-      // Nobody is there to answer: what would prompt is denied, the mode decides the rest.
+      // What the mode doesn't allow on its own is asked here, on stdin/stdout, and answered
+      // by the person from the office. The prompt goes in as a stream-json message.
+      "--input-format",
+      "stream-json",
       "--permission-prompts",
-      "none",
+      "host",
+      "--permission-prompt-tool",
+      "stdio",
     ];
     if (project.agent.model) args.push("--model", project.agent.model);
 
@@ -259,9 +280,23 @@ export class AgentRunner {
       let result: StreamResult | undefined;
       let stderr = "";
       createInterface({ input: child.stdout! }).on("line", (line) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          parsed = undefined;
+        }
+        const request = readPermissionRequest(parsed);
+        if (request) return this.ask(run, request);
+        const unsupported = unsupportedResponse(parsed);
+        if (unsupported) return void child.stdin!.write(unsupported);
         const update = readStreamLine(line, run.worktree);
         if (update.log) this.log(run, update.log);
-        if (update.result) result = update.result;
+        if (update.result) {
+          result = update.result;
+          // One ticket, one turn: closing stdin lets the session end.
+          child.stdin!.end();
+        }
       });
       child.stderr!.on(
         "data",
@@ -278,13 +313,51 @@ export class AgentRunner {
       });
       child.on("close", (code) => {
         this.children.delete(run.id);
+        this.requests.delete(run.id);
+        if (run.questions?.length) {
+          run.questions = [];
+          this.changed();
+        }
         this.options.onSession(run, "ended");
         if (run.status === "cancelled") reject(new Cancelled());
         else if (result) resolve(result);
         else reject(new Error(stderr.trim() || `claude exited with code ${code}`));
       });
-      child.stdin!.end(prompt);
+      // The session lasts until stdin closes; an exit before that must not throw EPIPE.
+      child.stdin!.on("error", () => {});
+      child.stdin!.write(promptMessage(prompt));
     });
+  }
+
+  /** The agent waits for the person: shown on the ticket, the character and a notification. */
+  private ask(run: RunView, request: PermissionRequest): void {
+    const question: AgentQuestion = {
+      ...describeRequest(request, run.worktree),
+      askedAt: Date.now(),
+    };
+    let pending = this.requests.get(run.id);
+    if (!pending) this.requests.set(run.id, (pending = new Map()));
+    pending.set(question.id, request);
+    run.questions = [...(run.questions ?? []), question];
+    this.log(run, `asks: ${question.summary}`);
+    this.changed();
+    this.options.onQuestion?.(run, question);
+  }
+
+  /** Allows or refuses what the agent asked; a refusal's message reaches the agent. */
+  answer(runId: string, questionId: string, allow: boolean, message?: string): void {
+    const run = this.runs.get(runId);
+    const request = this.requests.get(runId)?.get(questionId);
+    const child = this.children.get(runId);
+    if (!run || !request || !child?.stdin?.writable)
+      throw new Error("This question is no longer waiting for an answer");
+    child.stdin.write(permissionResponse(request, allow ? { allow } : { allow, message }));
+    this.requests.get(runId)!.delete(questionId);
+    const question = run.questions?.find((q) => q.id === questionId);
+    run.questions = (run.questions ?? []).filter((q) => q.id !== questionId);
+    this.log(run, `${allow ? "allowed" : "refused"}: ${question?.summary ?? request.toolName}`);
+    this.changed();
+    this.options.onQuestion?.(run, undefined);
   }
 
   private check(run: RunView): void {
@@ -350,6 +423,7 @@ export function loadHistory(path: string | undefined): RunView[] {
       isActiveRun(run)
         ? {
             ...run,
+            questions: [],
             status: "failed",
             endedAt: run.endedAt ?? Date.now(),
             error: "Interrupted: the app was closed",

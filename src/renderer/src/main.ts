@@ -7,7 +7,8 @@ import { FRAME_H, FRAME_W } from "./sprites/character-art";
 import type { Pose } from "./sprites/character";
 import { characterSprite, forgetCharacter } from "./sprites/cache";
 import { trackerLabel } from "../../shared/work/types";
-import { initBoard, resetBoard, showIssue, toggleBoard } from "./work/board";
+import { initBoard, resetBoard, showAgents, showIssue, toggleBoard } from "./work/board";
+import { waitingRuns } from "./work/questions-ui";
 import { initSettings, openSettings } from "./work/settings";
 import { checkMachine, initWelcome, openWelcome } from "./work/welcome";
 import { activeProject, loadWork, subscribe, update, work } from "./work/store";
@@ -25,6 +26,7 @@ const serverStatus = document.querySelector<HTMLElement>("#server-status")!;
 const agentCount = document.querySelector<HTMLElement>("#agent-count")!;
 const projectSelect = document.querySelector<HTMLSelectElement>("#project-select")!;
 const machineWarning = document.querySelector<HTMLButtonElement>("#machine-warning")!;
+const waitingAgents = document.querySelector<HTMLButtonElement>("#waiting-agents")!;
 
 // The scene is composed at 1x, then blown up by an integer factor for crisp pixels.
 const buffer = document.createElement("canvas");
@@ -310,6 +312,7 @@ function initWork(): void {
   initSettings(document.querySelector<HTMLDialogElement>("#settings")!);
   initWelcome(document.querySelector<HTMLDialogElement>("#welcome")!);
   machineWarning.addEventListener("click", () => openWelcome(0));
+  waitingAgents.addEventListener("click", showAgents);
   window.office.work.onOpenIssue((projectId, key) => void showIssue(projectId, key));
   initBoard(document.querySelector<HTMLElement>("#board")!);
   document.querySelector("#open-settings")!.addEventListener("click", () => openSettings());
@@ -322,6 +325,9 @@ function initWork(): void {
   subscribe(() => {
     renderProjectSelect();
     renderMachineWarning();
+    const waiting = waitingRuns(work.runs).length;
+    waitingAgents.hidden = waiting === 0;
+    waitingAgents.textContent = `✋ ${waiting} agent${waiting > 1 ? "s" : ""} waiting for you`;
     // Deleting or creating the first project changes the active one.
     if (activeProject()?.id !== shownProject) {
       shownProject = activeProject()?.id;

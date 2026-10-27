@@ -28,13 +28,14 @@ export class Notifier {
     if (notice) this.show(notice, () => this.options.openIssue(run));
   }
 
-  event(event: OfficeEvent): void {
+  /** `run`: the agent works on a ticket; clicking opens it, where the question is answered. */
+  event(event: OfficeEvent, run?: RunView): void {
     const notice = waitingNotice(event);
     if (!notice) return;
     const now = Date.now();
     if (now - (this.lastWaiting.get(event.agentId) ?? 0) < WAITING_QUIET_MS) return;
     this.lastWaiting.set(event.agentId, now);
-    this.show(notice);
+    this.show(notice, run && (() => this.options.openIssue(run)));
   }
 
   private show(notice: Notice, onClick?: () => void): void {

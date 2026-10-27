@@ -292,6 +292,20 @@ export interface HooksStatus {
   node: CheckResult;
 }
 
+/** An agent asks before using a tool its permission mode doesn't allow on its own. */
+export interface AgentQuestion {
+  id: string;
+  /** Tool name, e.g. "Bash" or "PowerShell". */
+  tool: string;
+  /** A few words: "npm test", "edit src/app.ts". */
+  summary: string;
+  /** What exactly would run: the command, the file, or the tool's input. */
+  detail: string;
+  /** Why, in the agent's words, when it said. */
+  reason?: string;
+  askedAt: number;
+}
+
 export interface RunView {
   id: string;
   projectId: string;
@@ -311,6 +325,8 @@ export interface RunView {
   costUsd?: number;
   /** Recent progress lines, newest last. */
   log: string[];
+  /** Questions waiting for an answer; the agent is paused on them. */
+  questions?: AgentQuestion[];
 }
 
 export const isActiveRun = (run: RunView): boolean =>
