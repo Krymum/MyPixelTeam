@@ -8,6 +8,7 @@ import {
   isActiveRun,
   isIssueKey,
   issueSlug,
+  MAX_CI_FIXES,
   MODEL_PATTERN,
   projectModel,
   type AgentQuestion,
@@ -23,6 +24,7 @@ import type { AccountStore } from "./accounts";
 import {
   buildContinuePrompt,
   buildPrompt,
+  ciInstruction,
   describeRequest,
   isUsageLimit,
   permissionResponse,
@@ -32,6 +34,8 @@ import {
   readStreamLine,
   resetTime,
   unsupportedResponse,
+  type EarlierTicket,
+  type FailedCheck,
   type PermissionRequest,
   type ReviewComment,
   type StreamResult,
@@ -46,6 +50,7 @@ import {
   remoteBranches,
   unpublishedCommits,
 } from "./git";
+import type { CiReport } from "../integrations/git-providers";
 import type { IssueTracker } from "../integrations/trackers";
 import {
   createdComment,
@@ -85,6 +90,11 @@ const CHANGE_THROTTLE_MS = 250;
 const RUN_LIMIT = 50;
 /** When the usage limit message doesn't say when it resets. */
 const LIMIT_FALLBACK_MS = 60 * 60 * 1000;
+/** Checks are read every minute after a push, for at most 45 minutes. */
+const CI_POLL_MS = 60_000;
+const CI_WATCH_MS = 45 * 60_000;
+/** Checks can take a moment to show up; with none after this, the repository runs none. */
+const CI_SETTLE_MS = 3 * 60_000;
 const RESUME_INSTRUCTION =
   "The Claude usage limit stopped you before you finished. Pick the ticket up where you left off: your changes so far are still in the worktree.";
 
@@ -92,8 +102,22 @@ class Cancelled extends Error {}
 
 /** What a run does: a ticket's first run, or the continuation of an earlier one. */
 type Plan =
-  | { kind: "new"; options: StartRunOptions }
+  | { kind: "new"; options: StartRunOptions; earlier?: EarlierTicket[] }
   | { kind: "continue"; instruction: string; includeReview: boolean };
+
+/** An epic's tickets, done one after another, each on a branch built on the previous one. */
+interface EpicChain {
+  projectId: string;
+  epicKey: string;
+  remaining: { key: string; summary: string }[];
+  /** The branch the next ticket starts from: the last one pushed. */
+  from?: string;
+  earlier: EarlierTicket[];
+  /** The run of the ticket being worked on. */
+  current?: string;
+  /** That run's ticket. */
+  ticket?: { key: string; summary: string };
+}
 
 /** A run waiting for a free desk, with what it will do once it gets one. */
 interface Waiting {
@@ -111,6 +135,8 @@ export class AgentRunner {
   private readonly waiting = new Map<string, Waiting>();
   /** Set when the Claude usage limit stopped an agent: no other agent starts before then. */
   private pausedUntil = 0;
+  private readonly epics = new Map<string, EpicChain>();
+  private readonly ciTimers = new Map<string, NodeJS.Timeout>();
   private changeTimer?: NodeJS.Timeout;
   private resumeTimer?: NodeJS.Timeout;
 
@@ -132,7 +158,12 @@ export class AgentRunner {
     return this.list().find((run) => run.sessionId === sessionId);
   }
 
-  start(projectId: string, issueKey: string, options: StartRunOptions = {}): RunView {
+  start(
+    projectId: string,
+    issueKey: string,
+    options: StartRunOptions = {},
+    earlier?: EarlierTicket[],
+  ): RunView {
     if (!isIssueKey(issueKey)) throw new Error(`Not an issue key: ${issueKey}`);
     const project = this.options.workspace.get(projectId);
     const busy = [...this.runs.values()].find((r) => r.issueKey === issueKey && isActiveRun(r));
@@ -152,7 +183,7 @@ export class AgentRunner {
       model: model || projectModel(project),
       log: [],
     };
-    return this.launch(run, project, { kind: "new", options });
+    return this.launch(run, project, { kind: "new", options, earlier });
   }
 
   /**
@@ -163,7 +194,7 @@ export class AgentRunner {
     previousRunId: string,
     instruction: string,
     options: ContinueOptions = {},
-    first = false,
+    extra: { first?: boolean; ciFixes?: number } = {},
   ): RunView {
     const previous = this.runs.get(previousRunId);
     if (!previous) throw new Error("Unknown run");
@@ -195,14 +226,94 @@ export class AgentRunner {
       continuedFrom: previous.id,
       instruction: instruction.trim() || undefined,
       model: previous.model ?? projectModel(project),
+      epicKey: previous.epicKey,
+      ciFixes: extra.ciFixes,
       log: [],
     };
+    // An epic waiting on this ticket waits on its continuation now.
+    for (const chain of this.epics.values())
+      if (chain.current === previous.id) chain.current = run.id;
     return this.launch(
       run,
       project,
       { kind: "continue", instruction, includeReview: Boolean(options.includeReview) },
-      first,
+      extra.first,
     );
+  }
+
+  /**
+   * Puts agents on an epic's open tickets, in their order in the epic, one after another:
+   * each starts from the branch of the one before, so the work it depends on is there.
+   */
+  async startEpic(projectId: string, epicKey: string): Promise<RunView> {
+    const project = this.options.workspace.get(projectId);
+    const epic = await this.options.accounts.tracker(project).issue(epicKey);
+    const open = (epic.children ?? []).filter((c) => c.statusCategory !== "done");
+    if (!open.length) throw new Error(`${epicKey} has no open ticket`);
+    const id = `${projectId}:${epicKey}`;
+    const current = this.runs.get(this.epics.get(id)?.current ?? "");
+    if (current && isActiveRun(current))
+      throw new Error(`Agents are already working through ${epicKey}`);
+    const busy = open.find((c) =>
+      [...this.runs.values()].some((r) => r.issueKey === c.key && isActiveRun(r)),
+    );
+    if (busy) throw new Error(`An agent is already on ${busy.key}: let it finish or stop it first`);
+    const chain: EpicChain = {
+      projectId,
+      epicKey,
+      remaining: open.map((c) => ({ key: c.key, summary: c.summary })),
+      earlier: [],
+    };
+    this.epics.set(id, chain);
+    return this.nextInEpic(chain)!;
+  }
+
+  private nextInEpic(chain: EpicChain): RunView | undefined {
+    const next = chain.remaining.shift();
+    if (!next) {
+      this.epics.delete(`${chain.projectId}:${chain.epicKey}`);
+      return undefined;
+    }
+    const run = this.start(
+      chain.projectId,
+      next.key,
+      { from: chain.from },
+      chain.earlier.length ? [...chain.earlier] : undefined,
+    );
+    run.epicKey = chain.epicKey;
+    chain.current = run.id;
+    chain.ticket = next;
+    this.log(
+      run,
+      `ticket ${chain.earlier.length + 1} of ${chain.earlier.length + 1 + chain.remaining.length} in ${chain.epicKey}`,
+    );
+    return run;
+  }
+
+  /** An epic's ticket ended: the next one starts, or the epic waits for the person. */
+  private epicStep(run: RunView): void {
+    if (!run.epicKey) return;
+    const chain = this.epics.get(`${run.projectId}:${run.epicKey}`);
+    if (!chain || chain.current !== run.id) return;
+    if (run.status === "done") {
+      if (run.pullRequestUrl) chain.from = run.branch;
+      chain.earlier.push({ ...chain.ticket!, result: run.result ?? "" });
+      try {
+        this.nextInEpic(chain);
+      } catch (err) {
+        this.log(run, `could not go on with ${chain.epicKey}: ${message(err)}`);
+        this.epics.delete(`${chain.projectId}:${chain.epicKey}`);
+      }
+      return;
+    }
+    // Picked up after the usage limit, or continued once the person gives more budget.
+    if (run.status === "failed" && (run.resumeAt || run.stoppedOnBudget)) return;
+    this.epics.delete(`${chain.projectId}:${chain.epicKey}`);
+    if (chain.remaining.length)
+      this.log(
+        run,
+        `${chain.epicKey} stopped here: ${chain.remaining.map((t) => t.key).join(", ")} wait for you`,
+      );
   }
 
   /** Queues the run; it starts right away when a desk is free. */
@@ -270,6 +381,7 @@ export class AgentRunner {
   /** On quit: agents must not keep running without the app watching them. */
   stopAll(): void {
     clearTimeout(this.resumeTimer);
+    for (const timer of this.ciTimers.values()) clearTimeout(timer);
     for (const run of this.runs.values()) if (isActiveRun(run)) this.cancel(run.id);
     this.save();
   }
@@ -301,19 +413,23 @@ export class AgentRunner {
     const onOrigin = await remoteBranches(project.localPath, auth);
     if (options.branch && !onOrigin.includes(options.branch))
       throw new Error(`The branch ${options.branch} is no longer on origin`);
+    if (options.from && !onOrigin.includes(options.from))
+      throw new Error(`The branch ${options.from} is no longer on origin`);
+    // An epic's ticket builds on the branch of the one before.
+    const start = options.from ?? base;
     if (plan.kind === "new") run.branch = options.branch ?? branchName(issue.key, issue.summary);
     const existing = onOrigin.includes(run.branch);
     this.log(
       run,
       existing
         ? `worktree on the existing branch ${run.branch}`
-        : `worktree on ${run.branch}, from ${base}`,
+        : `worktree on ${run.branch}, from ${start}`,
     );
     const note = await prepareWorktree({
       repoPath: project.localPath,
       worktree: run.worktree,
       branch: run.branch,
-      base,
+      base: start,
       auth,
       existing,
     });
@@ -325,7 +441,12 @@ export class AgentRunner {
 
     const prompt =
       plan.kind === "new"
-        ? buildPrompt(issue, project, { branch: run.branch, base, existing })
+        ? buildPrompt(issue, project, {
+            branch: run.branch,
+            base: start,
+            existing,
+            earlier: plan.earlier,
+          })
         : buildContinuePrompt(
             issue,
             project,
@@ -340,7 +461,9 @@ export class AgentRunner {
       tracker,
       plan.kind === "new"
         ? `An agent started on this ticket, on the branch ${run.branch}.`
-        : `An agent is back on this ticket, on the branch ${run.branch}${plan.instruction.trim() ? `:\n\n${plan.instruction.trim()}` : "."}`,
+        : run.ciFixes
+          ? `An agent is back on this ticket to fix the failing checks of its pull request (attempt ${run.ciFixes} of ${MAX_CI_FIXES}).`
+          : `An agent is back on this ticket, on the branch ${run.branch}${plan.instruction.trim() ? `:\n\n${plan.instruction.trim()}` : "."}`,
     );
     try {
       await this.work(run, project, plan, issue, prompt, startCommit);
@@ -377,6 +500,12 @@ export class AgentRunner {
     this.check(run);
     run.result = result.text;
     run.costUsd = result.costUsd;
+    if (result.isError && result.budgetReached) {
+      run.stoppedOnBudget = true;
+      throw new Error(
+        `Budget of $${run.budgetUsd} reached before the agent finished. Its changes are kept: continue the run to give it another $${run.budgetUsd}.`,
+      );
+    }
     if (result.isError && isUsageLimit(result.text)) {
       const at = this.pause(run, result.text);
       throw new Error(`${result.text}. The agent picks the ticket up again at ${clock(at)}.`);
@@ -413,9 +542,14 @@ export class AgentRunner {
     }
     await push(run.worktree, run.branch, auth);
     this.log(run, "branch pushed");
+    const pushed = await headCommit(run.worktree);
+    const from = plan.kind === "new" ? plan.options.from : undefined;
+    const stacked = from
+      ? `Built on ${from}, which holds the earlier tickets of the epic: merge their pull requests first.\n\n`
+      : "";
     run.pullRequestUrl = await provider.pullRequest(project.repo.fullName, {
       title: tracker.title(issue),
-      body: pullRequestBody(tracker.pullRequestReference(issue), result.text),
+      body: pullRequestBody(tracker.pullRequestReference(issue), stacked + result.text),
       head: run.branch,
       base,
     });
@@ -423,6 +557,72 @@ export class AgentRunner {
     await this.move(run, tracker, "review");
     await this.note(run, tracker, report(run.pullRequestUrl));
     this.finish(run, "done");
+    this.watchCi(run, project, pushed);
+  }
+
+  /**
+   * Follows the pull request's checks after a push. When they fail, the agent goes back on
+   * its pull request with the failure, at most MAX_CI_FIXES times in a row.
+   */
+  private watchCi(run: RunView, project: Project, sha: string): void {
+    const provider = this.options.accounts.git(project.repo.provider);
+    const since = Date.now();
+    run.ci = "pending";
+    this.changed();
+    const check = async (): Promise<void> => {
+      this.ciTimers.delete(run.id);
+      // A newer run on the ticket pushed again: its own watch takes over.
+      if (this.latest(run) !== run) return;
+      let report: CiReport;
+      try {
+        report = await provider.checks(project.repo.fullName, sha);
+      } catch (err) {
+        this.log(run, `could not read the checks: ${message(err)}`);
+        report = { state: "pending", failed: [] };
+      }
+      const waited = Date.now() - since;
+      if (report.state === "none" && waited >= CI_SETTLE_MS) {
+        run.ci = undefined;
+        return this.log(run, "no checks on the pull request");
+      }
+      if (report.state === "none" || report.state === "pending") {
+        if (waited < CI_WATCH_MS)
+          this.ciTimers.set(
+            run.id,
+            setTimeout(() => void check(), CI_POLL_MS),
+          );
+        else {
+          run.ci = undefined;
+          this.log(run, "checks still running after 45 minutes: no longer followed");
+        }
+        return;
+      }
+      run.ci = report.state;
+      if (report.state === "success") return this.log(run, "checks passed");
+      this.log(run, `checks failed: ${report.failed.map((f) => f.name).join(", ")}`);
+      this.fixCi(run, report.failed);
+    };
+    this.ciTimers.set(
+      run.id,
+      setTimeout(() => void check(), CI_POLL_MS),
+    );
+  }
+
+  private fixCi(run: RunView, failed: FailedCheck[]): void {
+    if (!this.options.workspace.view().fixCi) return;
+    const fixes = run.ciFixes ?? 0;
+    if (fixes >= MAX_CI_FIXES)
+      return this.log(run, `checks still failing after ${fixes} fixes: left to you`);
+    try {
+      this.continueRun(run.id, ciInstruction(failed), {}, { ciFixes: fixes + 1 });
+    } catch (err) {
+      this.log(run, `could not put the agent back on the checks: ${message(err)}`);
+    }
+  }
+
+  /** The ticket's most recent run. */
+  private latest(run: RunView): RunView | undefined {
+    return this.list().find((r) => r.projectId === run.projectId && r.issueKey === run.issueKey);
   }
 
   /**
@@ -450,7 +650,7 @@ export class AgentRunner {
       if (!run.resumeAt) continue;
       run.resumeAt = undefined;
       try {
-        this.continueRun(run.id, RESUME_INSTRUCTION, {}, true);
+        this.continueRun(run.id, RESUME_INSTRUCTION, {}, { first: true });
       } catch (err) {
         this.log(run, `could not pick the ticket up again: ${message(err)}`);
       }
@@ -545,6 +745,11 @@ export class AgentRunner {
       "stdio",
     ];
     args.push("--model", run.model ?? projectModel(project));
+    const budget = this.options.workspace.view().runBudgetUsd;
+    if (budget > 0) {
+      args.push("--max-budget-usd", String(budget));
+      run.budgetUsd = budget;
+    }
 
     // Started from inside a Claude Code session (dev), these would confuse the child.
     const env = { ...process.env };
@@ -566,6 +771,7 @@ export class AgentRunner {
 
     return new Promise((resolve, reject) => {
       let result: StreamResult | undefined;
+      const counted = new Set<string>();
       let stderr = "";
       createInterface({ input: child.stdout! }).on("line", (line) => {
         let parsed: unknown;
@@ -579,6 +785,12 @@ export class AgentRunner {
         const unsupported = unsupportedResponse(parsed);
         if (unsupported) return void child.stdin!.write(unsupported);
         const update = readStreamLine(line, run.worktree);
+        if (update.usage && !counted.has(update.usage.id)) {
+          counted.add(update.usage.id);
+          run.turns = (run.turns ?? 0) + 1;
+          run.tokens = (run.tokens ?? 0) + update.usage.tokens;
+          this.changed();
+        }
         if (update.log) this.log(run, update.log);
         if (update.result) {
           result = update.result;
@@ -676,6 +888,7 @@ export class AgentRunner {
     }
     this.changed();
     this.options.onFinished?.(run);
+    this.epicStep(run);
     this.drain();
   }
 
@@ -724,15 +937,17 @@ export function loadHistory(path: string | undefined): RunView[] {
     const runs = JSON.parse(readFileSync(path, "utf8")) as RunView[];
     if (!Array.isArray(runs)) return [];
     return runs.slice(-RUN_LIMIT).map((run) =>
-      isActiveRun(run)
-        ? {
-            ...run,
-            questions: [],
-            status: "failed",
-            endedAt: run.endedAt ?? Date.now(),
-            error: "Interrupted: the app was closed",
-          }
-        : run,
+      run.ci === "pending"
+        ? { ...run, ci: undefined }
+        : isActiveRun(run)
+          ? {
+              ...run,
+              questions: [],
+              status: "failed",
+              endedAt: run.endedAt ?? Date.now(),
+              error: "Interrupted: the app was closed",
+            }
+          : run,
     );
   } catch (err) {
     console.error(`[mypixelteam] could not read ${path}:`, err);

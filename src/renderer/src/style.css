@@ -616,6 +616,17 @@ h3 .source {
   color: var(--wait);
 }
 
+.pill.ci.pending {
+  background: var(--tint-wait);
+  color: var(--wait);
+}
+
+.pill.ci.success {
+  background: var(--tint-ok);
+  color: var(--ok);
+}
+
+.pill.ci.failure,
 .run-status.failed {
   background: var(--tint-bad);
   color: var(--bad);
@@ -1030,5 +1041,21 @@ button.waiting {
 }
 
 .guide-offer button {
+  justify-self: start;
+}
+
+.epic-box {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.epic-box p {
+  margin: 0;
+}
+
+.epic-box button {
   justify-self: start;
 }

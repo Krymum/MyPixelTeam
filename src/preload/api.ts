@@ -73,6 +73,7 @@ export const WORK_CALLS = [
   "ticketBranches",
   "startRun",
   "cancelRun",
+  "startEpic",
   "agentGuide",
   "prepareProject",
   "answerQuestion",
@@ -117,7 +118,9 @@ export interface WorkApi {
   /** The same analysis for a folder picked by hand; undefined when it is already a project. */
   inspectFolder(path: string): Promise<DiscoveredProject | undefined>;
   setPreferences(
-    prefs: Partial<Pick<Workspace, "onboarded" | "notifications" | "maxAgents">>,
+    prefs: Partial<
+      Pick<Workspace, "onboarded" | "notifications" | "maxAgents" | "runBudgetUsd" | "fixCi">
+    >,
   ): Promise<Workspace>;
   accounts(): Promise<AccountsView>;
   /** Checks the credentials, then stores them encrypted. */
@@ -154,6 +157,8 @@ export interface WorkApi {
   /** Puts an agent on the ticket. */
   startRun(projectId: string, issueKey: string, options?: StartRunOptions): Promise<RunView>;
   cancelRun(id: string): Promise<void>;
+  /** Puts agents on an epic's open tickets, one after another; the first ticket's run. */
+  startEpic(projectId: string, epicKey: string): Promise<RunView>;
   /** The repository has a CLAUDE.md or AGENTS.md on its base branch. */
   agentGuide(projectId: string): Promise<boolean>;
   /** Opens (or finds) the ticket asking for a CLAUDE.md and puts an agent on it; its key. */
