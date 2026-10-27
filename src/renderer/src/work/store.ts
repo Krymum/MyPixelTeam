@@ -28,6 +28,7 @@ export const work: WorkState = {
     maxAgents: 2,
     runBudgetUsd: 3,
     fixCi: true,
+    commentCommands: true,
   },
   runs: [],
 };

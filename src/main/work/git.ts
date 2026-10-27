@@ -118,10 +118,53 @@ export async function prepareWorktree(options: {
   auth: GitAuth;
   /** The branch is already on origin: start from its latest commit. */
   existing?: boolean;
+  /** A new run on the ticket: a branch pushed before and gone from origin starts over. */
+  fresh?: boolean;
 }): Promise<string | undefined> {
-  const { repoPath, worktree, branch, base, auth, existing } = options;
+  const { repoPath, branch, base, auth, existing } = options;
   await git(["fetch", "origin", base, ...(existing ? [branch] : [])], { cwd: repoPath, auth });
 
+  const restarted = options.fresh && !existing && (await dropGoneBranch(options));
+  const note = await openWorktree(options);
+  return restarted || note;
+}
+
+/**
+ * The local branch was pushed (push sets its upstream) and is no longer on origin: its pull
+ * request was merged or closed, so the ticket's new run starts again from the base. A
+ * worktree with uncommitted changes is kept, whatever the branch.
+ */
+async function dropGoneBranch(options: {
+  repoPath: string;
+  worktree: string;
+  branch: string;
+  base: string;
+}): Promise<string | undefined> {
+  const { repoPath, worktree, branch, base } = options;
+  // `push -u` points the upstream at the branch itself; a branch made from origin/<base>
+  // tracks the base until then.
+  const upstream = await git(["config", "--get", `branch.${branch}.merge`], {
+    cwd: repoPath,
+    allowFailure: true,
+  });
+  if (upstream !== `refs/heads/${branch}`) return undefined;
+  if (existsSync(join(worktree, ".git"))) {
+    if (await git(["status", "--porcelain"], { cwd: worktree })) return undefined;
+    await git(["worktree", "remove", worktree], { cwd: repoPath });
+  }
+  await git(["worktree", "prune"], { cwd: repoPath });
+  await git(["branch", "-D", branch], { cwd: repoPath });
+  return `${branch} was gone from origin (its pull request merged or closed): started it again from ${base}`;
+}
+
+async function openWorktree(options: {
+  repoPath: string;
+  worktree: string;
+  branch: string;
+  base: string;
+  existing?: boolean;
+}): Promise<string | undefined> {
+  const { repoPath, worktree, branch, base, existing } = options;
   if (existsSync(join(worktree, ".git"))) {
     const current = await git(["branch", "--show-current"], { cwd: worktree });
     if (current === branch) return existing ? fastForward(worktree, branch) : undefined;

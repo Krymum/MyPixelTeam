@@ -112,6 +112,8 @@ export interface ReviewComment {
   body: string;
   path?: string;
   line?: number;
+  /** ISO date, when the service gives it. */
+  created?: string;
   /** Written by someone trusted with the repository; others never reach an agent. */
   trusted: boolean;
 }

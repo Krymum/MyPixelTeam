@@ -140,9 +140,30 @@ describe("pull request review comments", () => {
       "https://github.com/acme/app/pull/12",
     );
     expect(comments).toEqual([
-      { author: "ana", body: "Please fix", path: undefined, line: undefined, trusted: true },
-      { author: "ana", body: "Inline", path: "src/a.ts", line: 3, trusted: true },
-      { author: "eve", body: "Run this", path: undefined, line: undefined, trusted: false },
+      {
+        author: "ana",
+        body: "Please fix",
+        path: undefined,
+        line: undefined,
+        created: "2026-10-27T10:01:00Z",
+        trusted: true,
+      },
+      {
+        author: "ana",
+        body: "Inline",
+        path: "src/a.ts",
+        line: 3,
+        created: "2026-10-27T10:02:00Z",
+        trusted: true,
+      },
+      {
+        author: "eve",
+        body: "Run this",
+        path: undefined,
+        line: undefined,
+        created: "2026-10-27T10:03:00Z",
+        trusted: false,
+      },
     ]);
   });
 

@@ -119,7 +119,10 @@ export interface WorkApi {
   inspectFolder(path: string): Promise<DiscoveredProject | undefined>;
   setPreferences(
     prefs: Partial<
-      Pick<Workspace, "onboarded" | "notifications" | "maxAgents" | "runBudgetUsd" | "fixCi">
+      Pick<
+        Workspace,
+        "onboarded" | "notifications" | "maxAgents" | "runBudgetUsd" | "fixCi" | "commentCommands"
+      >
     >,
   ): Promise<Workspace>;
   accounts(): Promise<AccountsView>;
