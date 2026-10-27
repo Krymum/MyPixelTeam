@@ -6,7 +6,7 @@ import type {
   IssueType,
   NewIssue,
 } from "../../shared/work/types";
-import { jsonClient, type Fetch } from "./http";
+import { HttpError, jsonClient, type Fetch } from "./http";
 import { JiraClient, pickTransition } from "./jira";
 
 /**
@@ -94,6 +94,7 @@ export class JiraTracker implements IssueTracker {
 }
 
 interface GhIssue {
+  id: number;
   number: number;
   title: string;
   body?: string | null;
@@ -166,6 +167,24 @@ export class GitHubIssues implements IssueTracker {
     return `/repos/${this.fullName}/issues${suffix}`;
   }
 
+  /** A write to the issues, saying which token permission is missing when GitHub refuses it. */
+  private async write<T>(method: string, path: string, body: unknown): Promise<T> {
+    try {
+      return await this.call<T>(method, path, body);
+    } catch (err) {
+      if (
+        err instanceof HttpError &&
+        err.status === 403 &&
+        /personal access token/i.test(err.message)
+      )
+        throw new HttpError(
+          403,
+          `The GitHub token can read ${this.fullName} but not write its issues. On github.com/settings/personal-access-tokens, edit that token: under "Repository permissions" set Issues to "Read and write", and check ${this.fullName} is under "Repository access".`,
+        );
+      throw err;
+    }
+  }
+
   async search(query: IssueQuery = {}): Promise<IssueSummary[]> {
     const text = query.text?.trim() ?? "";
     // "#12" or "12" goes straight to that issue.
@@ -194,13 +213,16 @@ export class GitHubIssues implements IssueTracker {
 
   async issue(key: string): Promise<IssueDetail> {
     const n = issueNumber(key);
-    const [issue, comments, repo] = await Promise.all([
+    const [issue, comments, repo, parent, children] = await Promise.all([
       this.call<GhIssue>("GET", this.path(`/${n}`)),
       this.call<GhComment[]>("GET", this.path(`/${n}/comments?per_page=100`)),
       this.call<{ permissions?: Record<string, boolean>; has_issues?: boolean; private?: boolean }>(
         "GET",
         `/repos/${this.fullName}`,
       ),
+      // Sub-issues can be off for the repository: no parent, no children then.
+      this.call<GhIssue>("GET", this.path(`/${n}/parent`)).catch(() => undefined),
+      this.call<GhIssue[]>("GET", this.path(`/${n}/sub_issues?per_page=100`)).catch(() => []),
     ]);
     const p = repo.permissions ?? {};
     const triage = Boolean(p.admin || p.maintain || p.push || p.triage);
@@ -208,6 +230,8 @@ export class GitHubIssues implements IssueTracker {
       ...this.summary(issue),
       description: issue.body ?? "",
       author: issue.user?.login,
+      parent: parent ? this.summary(parent) : undefined,
+      children: children.map((c) => this.summary(c)),
       // Files on GitHub are links in the Markdown, opened in the browser.
       attachments: [],
       trusted: isTrustedAuthor(issue.author_association),
@@ -243,10 +267,18 @@ export class GitHubIssues implements IssueTracker {
   }
 
   async create(issue: NewIssue): Promise<string> {
-    const created = await this.call<GhIssue>("POST", this.path(), {
+    const parent = issue.parentKey ? issueNumber(issue.parentKey) : undefined;
+    const created = await this.write<GhIssue>("POST", this.path(), {
       title: issue.summary.trim(),
-      body: issue.description ?? "",
+      body: [parent ? `Part of #${parent}` : "", issue.description ?? ""]
+        .filter(Boolean)
+        .join("\n\n"),
     });
+    // Sub-issues may be off for the repository: the "Part of" line still links them.
+    if (parent)
+      await this.call("POST", this.path(`/${parent}/sub_issues`), {
+        sub_issue_id: created.id,
+      }).catch(() => undefined);
     return `#${created.number}`;
   }
 
@@ -255,21 +287,21 @@ export class GitHubIssues implements IssueTracker {
     if (changes.summary !== undefined) body.title = changes.summary.trim();
     if (changes.description !== undefined) body.body = changes.description;
     if (Object.keys(body).length === 0) return;
-    await this.call("PATCH", this.path(`/${issueNumber(key)}`), body);
+    await this.write("PATCH", this.path(`/${issueNumber(key)}`), body);
   }
 
   async transition(key: string, transitionId: string): Promise<void> {
     const [state, reason] = transitionId.split(":");
     if (state !== "open" && state !== "closed")
       throw new Error(`Unknown transition ${transitionId}`);
-    await this.call("PATCH", this.path(`/${issueNumber(key)}`), {
+    await this.write("PATCH", this.path(`/${issueNumber(key)}`), {
       state,
       ...(reason ? { state_reason: reason } : {}),
     });
   }
 
   async comment(key: string, text: string): Promise<void> {
-    await this.call("POST", this.path(`/${issueNumber(key)}/comments`), { body: text });
+    await this.write("POST", this.path(`/${issueNumber(key)}/comments`), { body: text });
   }
 
   async advance(_key: string, goal: "start" | "review"): Promise<Advance> {

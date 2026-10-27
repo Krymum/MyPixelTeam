@@ -225,6 +225,10 @@ export interface IssueDetail extends IssueSummary {
   comments: IssueComment[];
   attachments: Attachment[];
   permissions: IssuePermissions;
+  /** The epic (Jira) or parent issue (GitHub) holding this ticket. */
+  parent?: IssueSummary;
+  /** The tickets this one holds, when it is an epic or a parent issue. */
+  children?: IssueSummary[];
 }
 
 export interface IssueType {
@@ -241,6 +245,8 @@ export interface NewIssue {
   issueTypeId: string;
   summary: string;
   description?: string;
+  /** The epic (Jira) or parent issue (GitHub) the new ticket belongs to. */
+  parentKey?: string;
 }
 
 export interface IssueChanges {

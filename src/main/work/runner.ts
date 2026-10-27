@@ -9,6 +9,7 @@ import {
   isIssueKey,
   issueSlug,
   type AgentQuestion,
+  type IssueDetail,
   type ContinueOptions,
   type Project,
   type QuestionAnswer,
@@ -42,6 +43,12 @@ import {
   unpublishedCommits,
 } from "./git";
 import type { IssueTracker } from "../integrations/trackers";
+import {
+  createdComment,
+  createTickets,
+  takeTicketDrafts,
+  type CreatedTicket,
+} from "./ticket-drafts";
 import type { WorkspaceStore } from "./workspace";
 
 /**
@@ -249,6 +256,44 @@ export class AgentRunner {
           );
     run.status = "running";
     this.changed();
+    await this.note(
+      run,
+      tracker,
+      plan.kind === "new"
+        ? `An agent started on this ticket, on the branch ${run.branch}.`
+        : `An agent is back on this ticket, on the branch ${run.branch}${plan.instruction.trim() ? `:\n\n${plan.instruction.trim()}` : "."}`,
+    );
+    try {
+      await this.work(run, project, plan, issue, prompt, startCommit);
+    } catch (err) {
+      // `cancel` changes the status behind TypeScript's back.
+      const cancelled = err instanceof Cancelled || (run.status as RunStatus) === "cancelled";
+      await this.note(
+        run,
+        tracker,
+        cancelled
+          ? "The agent was stopped before it finished."
+          : `The agent could not finish: ${message(err)}${run.result ? `\n\n${run.result}` : ""}`,
+      );
+      throw err;
+    }
+  }
+
+  /** The agent's run once its ticket says it started, and everything it hands back. */
+  private async work(
+    run: RunView,
+    project: Project,
+    plan: Plan,
+    issue: IssueDetail,
+    prompt: string,
+    startCommit: string,
+  ): Promise<void> {
+    const { accounts } = this.options;
+    const tracker = accounts.tracker(project);
+    const provider = accounts.git(project.repo.provider);
+    const auth = provider.gitAuth();
+    const base = baseBranchOf(project);
+
     const result = await this.agent(run, project, prompt, plan.kind === "continue");
     this.check(run);
     run.result = result.text;
@@ -257,13 +302,30 @@ export class AgentRunner {
 
     run.status = "publishing";
     this.changed();
+    const created = await this.createTickets(run, tracker);
+    // What the ticket keeps of the run: the pull request, the summary, the new tickets.
+    const report = (pullRequest?: string) =>
+      [
+        pullRequest
+          ? `${plan.kind === "new" ? "An agent opened a pull request" : "An agent updated the pull request"}: ${pullRequest}`
+          : "The agent finished without a pull request.",
+        result.text.trim(),
+        created.length ? createdComment(created) : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
     const committed = await commitAll(run.worktree, tracker.title(issue));
     if (committed) this.log(run, "changes committed");
-    if (!project.agent.openPullRequest) return this.finish(run, "done");
+    if (!project.agent.openPullRequest) {
+      await this.note(run, tracker, report());
+      return this.finish(run, "done");
+    }
     // An existing branch may hold colleagues' commits: publish only what is new.
     const moved = (await headCommit(run.worktree)) !== startCommit;
     if (!moved && (await unpublishedCommits(run.worktree, run.branch, base)) === 0) {
       this.log(run, "no changes to publish");
+      await this.note(run, tracker, report());
       return this.finish(run, "done");
     }
     await push(run.worktree, run.branch, auth);
@@ -276,15 +338,36 @@ export class AgentRunner {
     });
     this.log(run, `pull request: ${run.pullRequestUrl}`);
     await this.move(run, tracker, "review");
-    // A GitHub issue already lists the pull request that closes it.
-    if (tracker.kind === "jira")
-      await tracker
-        .comment(
-          issue.key,
-          `${plan.kind === "new" ? "An agent opened a pull request" : "An agent updated the pull request"}: ${run.pullRequestUrl}\n\n${result.text}`,
-        )
-        .catch((err) => this.log(run, `could not comment on the ticket: ${message(err)}`));
+    await this.note(run, tracker, report(run.pullRequestUrl));
     this.finish(run, "done");
+  }
+
+  /** A comment on the run's ticket; a failure is logged, not fatal. */
+  private async note(run: RunView, tracker: IssueTracker, text: string): Promise<void> {
+    try {
+      await tracker.comment(run.issueKey, text);
+    } catch (err) {
+      this.log(run, `could not comment on the ticket: ${message(err)}`);
+    }
+  }
+
+  /** The tickets the agent wrote to its ticket file, created with the project's account. */
+  private async createTickets(run: RunView, tracker: IssueTracker): Promise<CreatedTicket[]> {
+    const drafts = takeTicketDrafts(run.worktree);
+    if (!drafts?.length) return [];
+    const created: CreatedTicket[] = [];
+    try {
+      await createTickets(tracker, drafts, (t) => {
+        created.push(t);
+        this.log(run, `ticket created: ${t.key} ${t.summary}`);
+      });
+    } catch (err) {
+      const before = created.length
+        ? ` (created before the error: ${created.map((t) => t.key).join(", ")})`
+        : "";
+      throw new Error(`Could not create the tickets: ${message(err)}${before}`, { cause: err });
+    }
+    return created;
   }
 
   /** The pull request's review comments; a failure is logged, not fatal. */
