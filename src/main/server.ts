@@ -109,7 +109,7 @@ export function createIngestServer(options: IngestServerOptions): http.Server {
       if (err instanceof HttpError) {
         send(res, err.status, { error: err.message, details: err.details });
       } else {
-        console.error("[agent-office] ingest error", err);
+        console.error("[mypixelteam] ingest error", err);
         send(res, 500, { error: "Internal error" });
       }
     });

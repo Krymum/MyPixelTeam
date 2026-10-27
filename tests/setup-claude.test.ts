@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-// @ts-expect-error -- plain .mjs helper without type declarations
 import { CLAUDE_EVENTS, install, isOurs, uninstall } from "../scripts/setup/claude.mjs";
 
 const COMMAND = 'node "D:/tools/agent-office/adapters/claude-code.mjs"';

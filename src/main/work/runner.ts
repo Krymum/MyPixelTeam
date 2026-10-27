@@ -1,0 +1,372 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { createInterface } from "node:readline";
+import {
+  baseBranchOf,
+  isActiveRun,
+  isIssueKey,
+  issueSlug,
+  type Project,
+  type RunStatus,
+  type StartRunOptions,
+  type RunView,
+} from "../../shared/work/types";
+import type { AccountStore } from "./accounts";
+import { buildPrompt, pullRequestBody, readStreamLine, type StreamResult } from "./agent-protocol";
+import {
+  branchName,
+  commitAll,
+  ensureClone,
+  headCommit,
+  prepareWorktree,
+  push,
+  remoteBranches,
+  unpublishedCommits,
+} from "./git";
+import type { IssueTracker } from "../integrations/trackers";
+import type { WorkspaceStore } from "./workspace";
+
+/**
+ * Puts an agent on a Jira ticket: worktree and branch, ticket to "in progress",
+ * `claude -p` in the worktree, then commit, push, pull request and ticket to "review".
+ * The session writes its transcript like any other, so its character shows up in the office.
+ */
+
+export interface RunnerOptions {
+  accounts: AccountStore;
+  workspace: WorkspaceStore;
+  /** Worktrees go to <worktreesDir>/<project id>/<issue key>. */
+  worktreesDir: string;
+  /** Claude Code CLI, "claude" by default. */
+  claude: string;
+  onChange: (runs: RunView[]) => void;
+  /** The agent's session started or ended, for the office. */
+  onSession: (run: RunView, phase: "started" | "ended") => void;
+  /** A run reached done, failed or cancelled. */
+  onFinished?: (run: RunView) => void;
+  /** JSON file keeping the runs across restarts. */
+  historyPath?: string;
+}
+
+const LOG_LIMIT = 200;
+/** Agents log a lot: the renderer gets at most a few updates per second. */
+const CHANGE_THROTTLE_MS = 250;
+const RUN_LIMIT = 50;
+
+class Cancelled extends Error {}
+
+export class AgentRunner {
+  private readonly runs = new Map<string, RunView>();
+  private readonly children = new Map<string, ChildProcess>();
+  private changeTimer?: NodeJS.Timeout;
+
+  constructor(private readonly options: RunnerOptions) {
+    for (const run of loadHistory(options.historyPath)) this.runs.set(run.id, run);
+  }
+
+  list(): RunView[] {
+    return [...this.runs.values()].reverse();
+  }
+
+  bySession(sessionId: string): RunView | undefined {
+    for (const run of this.runs.values()) if (run.sessionId === sessionId) return run;
+    return undefined;
+  }
+
+  start(projectId: string, issueKey: string, options: StartRunOptions = {}): RunView {
+    if (!isIssueKey(issueKey)) throw new Error(`Not an issue key: ${issueKey}`);
+    const project = this.options.workspace.get(projectId);
+    const busy = [...this.runs.values()].find((r) => r.issueKey === issueKey && isActiveRun(r));
+    if (busy) throw new Error(`An agent is already on ${issueKey}`);
+    const run: RunView = {
+      id: randomUUID(),
+      projectId,
+      issueKey,
+      issueSummary: "",
+      sessionId: randomUUID(),
+      status: "preparing",
+      branch: "",
+      worktree: join(this.options.worktreesDir, projectId, issueSlug(issueKey)),
+      startedAt: Date.now(),
+      log: [],
+    };
+    this.runs.set(run.id, run);
+    this.trim();
+    this.changed();
+    void this.execute(run, project, options).catch((err) => {
+      const cancelled = err instanceof Cancelled || run.status === "cancelled";
+      this.finish(run, cancelled ? "cancelled" : "failed", cancelled ? undefined : err);
+    });
+    return run;
+  }
+
+  cancel(id: string): void {
+    const run = this.runs.get(id);
+    if (!run || !isActiveRun(run)) return;
+    run.status = "cancelled";
+    this.log(run, "cancelled");
+    const child = this.children.get(id);
+    if (child?.pid) killTree(child.pid);
+    this.changed();
+  }
+
+  /** On quit: agents must not keep running without the app watching them. */
+  stopAll(): void {
+    for (const run of this.runs.values()) this.cancel(run.id);
+    this.save();
+  }
+
+  private async execute(run: RunView, project: Project, options: StartRunOptions): Promise<void> {
+    const { accounts } = this.options;
+    const tracker = accounts.tracker(project);
+    const provider = accounts.git(project.repo.provider);
+    const auth = provider.gitAuth();
+
+    const issue = await tracker.issue(run.issueKey);
+    if (!issue.trusted && !options.allowUntrusted)
+      throw new Error(
+        `${issue.key} was opened by ${issue.author ?? "someone"}, who is not a collaborator of the repository. ` +
+          "Read it, then confirm to put an agent on it anyway.",
+      );
+    run.issueSummary = issue.summary;
+    this.log(run, `ticket: ${issue.summary}`);
+    this.check(run);
+
+    const base = baseBranchOf(project);
+    this.log(run, `repository: ${project.localPath}`);
+    await ensureClone(project.repo.cloneUrl, project.localPath, auth);
+    this.check(run);
+    // An existing branch was picked by the person among those on origin: check it still is.
+    // A branch picked among those on origin must still be there; the agent's own branch from
+    // an earlier run continues from origin too, or its push would be refused.
+    const onOrigin = await remoteBranches(project.localPath, auth);
+    if (options.branch && !onOrigin.includes(options.branch))
+      throw new Error(`The branch ${options.branch} is no longer on origin`);
+    run.branch = options.branch ?? branchName(issue.key, issue.summary);
+    const existing = onOrigin.includes(run.branch);
+    this.log(
+      run,
+      existing
+        ? `worktree on the existing branch ${run.branch}`
+        : `worktree on ${run.branch}, from ${base}`,
+    );
+    const note = await prepareWorktree({
+      repoPath: project.localPath,
+      worktree: run.worktree,
+      branch: run.branch,
+      base,
+      auth,
+      existing,
+    });
+    if (note) this.log(run, note);
+    this.check(run);
+    const startCommit = await headCommit(run.worktree);
+
+    if (issue.statusCategory !== "indeterminate") await this.move(run, tracker, "start");
+
+    run.status = "running";
+    this.changed();
+    const result = await this.agent(
+      run,
+      project,
+      buildPrompt(issue, project, { branch: run.branch, base, existing }),
+    );
+    this.check(run);
+    run.result = result.text;
+    run.costUsd = result.costUsd;
+    if (result.isError) throw new Error(result.text || "The agent stopped with an error");
+
+    run.status = "publishing";
+    this.changed();
+    const committed = await commitAll(run.worktree, tracker.title(issue));
+    if (committed) this.log(run, "changes committed");
+    if (!project.agent.openPullRequest) return this.finish(run, "done");
+    // An existing branch may hold colleagues' commits: publish only what is new.
+    const moved = (await headCommit(run.worktree)) !== startCommit;
+    if (!moved && (await unpublishedCommits(run.worktree, run.branch, base)) === 0) {
+      this.log(run, "no changes to publish");
+      return this.finish(run, "done");
+    }
+    await push(run.worktree, run.branch, auth);
+    this.log(run, "branch pushed");
+    run.pullRequestUrl = await provider.pullRequest(project.repo.fullName, {
+      title: tracker.title(issue),
+      body: pullRequestBody(tracker.pullRequestReference(issue), result.text),
+      head: run.branch,
+      base,
+    });
+    this.log(run, `pull request: ${run.pullRequestUrl}`);
+    await this.move(run, tracker, "review");
+    // A GitHub issue already lists the pull request that closes it.
+    if (tracker.kind === "jira")
+      await tracker
+        .comment(
+          issue.key,
+          `An agent opened a pull request: ${run.pullRequestUrl}\n\n${result.text}`,
+        )
+        .catch((err) => this.log(run, `could not comment on the ticket: ${message(err)}`));
+    this.finish(run, "done");
+  }
+
+  /** Moves the ticket along its workflow when the tracker has a fitting status. */
+  private async move(run: RunView, tracker: IssueTracker, goal: "start" | "review"): Promise<void> {
+    try {
+      const { moved, skipped } = await tracker.advance(run.issueKey, goal);
+      this.log(run, moved ? `ticket → ${moved}` : `${skipped}: ticket left as is`);
+    } catch (err) {
+      this.log(run, `could not move the ticket: ${message(err)}`);
+    }
+  }
+
+  private agent(run: RunView, project: Project, prompt: string): Promise<StreamResult> {
+    const args = [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--session-id",
+      run.sessionId,
+      "--name",
+      run.issueKey,
+      "--permission-mode",
+      project.agent.permissionMode,
+      // Nobody is there to answer: what would prompt is denied, the mode decides the rest.
+      "--permission-prompts",
+      "none",
+    ];
+    if (project.agent.model) args.push("--model", project.agent.model);
+
+    // Started from inside a Claude Code session (dev), these would confuse the child.
+    const env = { ...process.env };
+    delete env.CLAUDECODE;
+    delete env.CLAUDE_CODE_ENTRYPOINT;
+
+    const command = this.options.claude;
+    const child = spawn(command, args, {
+      cwd: run.worktree,
+      env,
+      windowsHide: true,
+      // npm installs a .cmd shim on Windows, which only a shell can start. Arguments are
+      // fixed or validated (model), and the prompt goes through stdin.
+      shell: /\.(cmd|bat)$/i.test(command),
+    });
+    this.children.set(run.id, child);
+    this.options.onSession(run, "started");
+
+    return new Promise((resolve, reject) => {
+      let result: StreamResult | undefined;
+      let stderr = "";
+      createInterface({ input: child.stdout! }).on("line", (line) => {
+        const update = readStreamLine(line, run.worktree);
+        if (update.log) this.log(run, update.log);
+        if (update.result) result = update.result;
+      });
+      child.stderr!.on(
+        "data",
+        (chunk: Buffer) => (stderr = (stderr + chunk.toString()).slice(-4000)),
+      );
+      child.on("error", (err: NodeJS.ErrnoException) => {
+        reject(
+          err.code === "ENOENT"
+            ? new Error(
+                `Claude Code CLI not found ("${command}"). Install it or set AGENT_OFFICE_CLAUDE to its path.`,
+              )
+            : err,
+        );
+      });
+      child.on("close", (code) => {
+        this.children.delete(run.id);
+        this.options.onSession(run, "ended");
+        if (run.status === "cancelled") reject(new Cancelled());
+        else if (result) resolve(result);
+        else reject(new Error(stderr.trim() || `claude exited with code ${code}`));
+      });
+      child.stdin!.end(prompt);
+    });
+  }
+
+  private check(run: RunView): void {
+    if (run.status === "cancelled") throw new Cancelled();
+  }
+
+  private finish(run: RunView, status: RunStatus, err?: unknown): void {
+    run.status = status;
+    run.endedAt = Date.now();
+    if (err) {
+      run.error = message(err);
+      this.log(run, `failed: ${run.error}`);
+    }
+    this.changed();
+    this.options.onFinished?.(run);
+  }
+
+  private log(run: RunView, line: string): void {
+    run.log.push(`${new Date().toLocaleTimeString()}  ${line}`);
+    if (run.log.length > LOG_LIMIT) run.log.splice(0, run.log.length - LOG_LIMIT);
+    this.changed();
+  }
+
+  private changed(): void {
+    this.changeTimer ??= setTimeout(() => {
+      this.changeTimer = undefined;
+      this.options.onChange(this.list());
+      this.save();
+    }, CHANGE_THROTTLE_MS);
+  }
+
+  /** Forgets the oldest finished runs. */
+  private trim(): void {
+    for (const [id, run] of this.runs) {
+      if (this.runs.size <= RUN_LIMIT) return;
+      if (!isActiveRun(run)) this.runs.delete(id);
+    }
+  }
+
+  private save(): void {
+    const path = this.options.historyPath;
+    if (!path) return;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(`${path}.tmp`, JSON.stringify([...this.runs.values()]));
+      renameSync(`${path}.tmp`, path);
+    } catch (err) {
+      console.error(`[mypixelteam] could not save ${path}:`, err);
+    }
+  }
+}
+
+/**
+ * Runs from previous launches. One still marked active was cut short by a crash: the app
+ * stops its agents when it quits normally.
+ */
+export function loadHistory(path: string | undefined): RunView[] {
+  if (!path || !existsSync(path)) return [];
+  try {
+    const runs = JSON.parse(readFileSync(path, "utf8")) as RunView[];
+    if (!Array.isArray(runs)) return [];
+    return runs.slice(-RUN_LIMIT).map((run) =>
+      isActiveRun(run)
+        ? {
+            ...run,
+            status: "failed",
+            endedAt: run.endedAt ?? Date.now(),
+            error: "Interrupted: the app was closed",
+          }
+        : run,
+    );
+  } catch (err) {
+    console.error(`[mypixelteam] could not read ${path}:`, err);
+    return [];
+  }
+}
+
+const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** Stops the agent and whatever commands it started. */
+function killTree(pid: number): void {
+  if (process.platform === "win32")
+    spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true });
+  else process.kill(pid, "SIGTERM");
+}

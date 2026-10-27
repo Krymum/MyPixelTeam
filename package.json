@@ -1,5 +1,5 @@
 {
-  "name": "agent-office",
+  "name": "mypixelteam",
   "version": "0.1.0",
   "description": "A pixel-art open space where your AI coding agents live and work.",
   "license": "MIT",
@@ -43,19 +43,24 @@
     "vitest": "^5.0.5"
   },
   "build": {
-    "appId": "dev.agent-office",
+    "appId": "com.mypixelteam.app",
     "productName": "MyPixelTeam",
     "directories": {
       "output": "dist"
     },
     "files": [
       "out/**",
+      "adapters/**",
       "office.config.json",
       "package.json"
     ],
     "win": {
       "target": "portable",
       "artifactName": "MyPixelTeam.exe"
-    }
-  }
+    },
+    "asarUnpack": [
+      "adapters/**"
+    ]
+  },
+  "productName": "MyPixelTeam"
 }

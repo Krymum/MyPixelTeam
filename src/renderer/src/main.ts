@@ -6,6 +6,11 @@ import { drawBackground, SCENERY, type Drawable } from "./scenery";
 import { FRAME_H, FRAME_W } from "./sprites/character-art";
 import type { Pose } from "./sprites/character";
 import { characterSprite, forgetCharacter } from "./sprites/cache";
+import { trackerLabel } from "../../shared/work/types";
+import { initBoard, resetBoard, showIssue, toggleBoard } from "./work/board";
+import { initSettings, openSettings } from "./work/settings";
+import { checkMachine, initWelcome, openWelcome } from "./work/welcome";
+import { activeProject, loadWork, subscribe, update, work } from "./work/store";
 
 const WIDTH = MAP_W * TILE;
 const HEIGHT = MAP_H * TILE;
@@ -18,6 +23,8 @@ const ctx = canvas.getContext("2d")!;
 const panel = document.querySelector<HTMLElement>("#panel")!;
 const serverStatus = document.querySelector<HTMLElement>("#server-status")!;
 const agentCount = document.querySelector<HTMLElement>("#agent-count")!;
+const projectSelect = document.querySelector<HTMLSelectElement>("#project-select")!;
+const machineWarning = document.querySelector<HTMLButtonElement>("#machine-warning")!;
 
 // The scene is composed at 1x, then blown up by an integer factor for crisp pixels.
 const buffer = document.createElement("canvas");
@@ -83,9 +90,11 @@ function actorDrawable(actor: Actor, t: number): Drawable {
 function resize(): void {
   const stage = canvas.parentElement!;
   const fit = Math.min(stage.clientWidth / WIDTH, stage.clientHeight / HEIGHT);
-  scale = Math.max(1, Math.floor(fit));
-  canvas.width = WIDTH * scale;
-  canvas.height = HEIGHT * scale;
+  // Whole multiples keep every pixel the same size; below 2x (a narrow window, the ticket
+  // board open) the office uses the room it has rather than dropping to a tiny 1x.
+  scale = fit >= 2 ? Math.floor(fit) : Math.max(1, Math.floor(fit * 10) / 10);
+  canvas.width = Math.round(WIDTH * scale);
+  canvas.height = Math.round(HEIGHT * scale);
 }
 
 function truncate(text: string): string {
@@ -224,10 +233,20 @@ function refreshChrome(): void {
     ? (agents[selectedId] ?? sim.actors.get(selectedId)?.agent)
     : undefined;
   const parent = selected?.parentId ? agents[selected.parentId] : undefined;
-  renderPanel(panel, selected, parent?.name, () => {
-    selectedId = undefined;
-    refreshChrome();
-  });
+  const run =
+    selected && !selected.parentId
+      ? work.runs.find((r) => r.sessionId === selected.sessionId)
+      : undefined;
+  renderPanel(
+    panel,
+    selected,
+    parent?.name,
+    () => {
+      selectedId = undefined;
+      refreshChrome();
+    },
+    run && { view: run, openIssue: () => void showIssue(run.projectId, run.issueKey) },
+  );
   agentCount.textContent = `${Object.keys(agents).length} agent(s)`;
 }
 
@@ -263,8 +282,67 @@ async function refreshStatus(): Promise<void> {
   serverStatus.replaceChildren(...parts);
 }
 
+function renderProjectSelect(): void {
+  const { projects } = work.workspace;
+  projectSelect.hidden = projects.length === 0;
+  projectSelect.replaceChildren(
+    ...projects.map((p) => {
+      const option = document.createElement("option");
+      option.value = p.id;
+      option.textContent = `${p.name} (${trackerLabel(p.tracker)})`;
+      return option;
+    }),
+  );
+  projectSelect.value = activeProject()?.id ?? "";
+}
+
+/** Top bar warning when agents can't run on this machine. */
+function renderMachineWarning(): void {
+  const env = work.environment;
+  const problem = env && [env.git, env.claude, env.claudeAuth].find((c) => !c.ok);
+  machineWarning.hidden = !problem;
+  if (!problem) return;
+  machineWarning.textContent = `⚠ Agents can't run: ${problem.detail}`;
+  machineWarning.title = "Open the setup guide";
+}
+
+function initWork(): void {
+  initSettings(document.querySelector<HTMLDialogElement>("#settings")!);
+  initWelcome(document.querySelector<HTMLDialogElement>("#welcome")!);
+  machineWarning.addEventListener("click", () => openWelcome(0));
+  window.office.work.onOpenIssue((projectId, key) => void showIssue(projectId, key));
+  initBoard(document.querySelector<HTMLElement>("#board")!);
+  document.querySelector("#open-settings")!.addEventListener("click", () => openSettings());
+  document.querySelector("#open-board")!.addEventListener("click", () => toggleBoard());
+  projectSelect.addEventListener("change", async () => {
+    update({ workspace: await window.office.work.setActiveProject(projectSelect.value) });
+    resetBoard();
+  });
+  let shownProject = activeProject()?.id;
+  subscribe(() => {
+    renderProjectSelect();
+    renderMachineWarning();
+    // Deleting or creating the first project changes the active one.
+    if (activeProject()?.id !== shownProject) {
+      shownProject = activeProject()?.id;
+      resetBoard();
+    }
+  });
+  void loadWork()
+    .then(() => {
+      // First launch: walk through the setup. Existing users with projects are left alone.
+      if (!work.workspace.onboarded && work.workspace.projects.length === 0) openWelcome();
+    })
+    .catch((err) => console.error("could not load work settings", err));
+  void checkMachine().catch((err) => console.error("could not check the machine", err));
+}
+
 async function boot(): Promise<void> {
+  initWork();
   await refreshStatus();
+  const { openOnStart } = await window.office.info();
+  if (openOnStart === "board") toggleBoard(true);
+  if (openOnStart === "settings") openSettings();
   for (const event of await window.office.history()) sim.ingest(event);
   window.office.onEvent((event) => {
     sim.ingest(event);
@@ -275,7 +353,8 @@ async function boot(): Promise<void> {
     selectedId = actorAt(e.clientX, e.clientY)?.id;
     refreshChrome();
   });
-  window.addEventListener("resize", resize);
+  // The stage changes size with the window and when the ticket board opens or closes.
+  new ResizeObserver(resize).observe(canvas.parentElement!);
   resize();
   refreshChrome();
   // Keep the "on duty" duration ticking and pick up config changes.
