@@ -199,6 +199,9 @@ export function registerWorkIpc(deps: {
       runner.answer(runId, questionId, answer, message),
     continueRun: async (runId, instruction, options) =>
       runner.continueRun(runId, instruction, options),
+    pullRequest: (runId) => runner.pullRequest(runId),
+    mergePullRequest: (runId) => runner.mergePullRequest(runId),
+    closePullRequest: (runId) => runner.closePullRequest(runId),
   };
 
   for (const name of WORK_CALLS) {

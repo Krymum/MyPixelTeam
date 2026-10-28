@@ -25,7 +25,7 @@ describe("ticket state", () => {
       ticketState(run({ status: "running", questions: [{ tool: "Bash" } as never] })).label,
     ).toBe("Asks you");
     expect(
-      ticketState(run({ status: "failed", error: "You've hit your session limit Â· resets 8pm" }))
+      ticketState(run({ status: "failed", error: "You've hit your session limit · resets 8pm" }))
         .label,
     ).toBe("Usage limit");
     expect(ticketState(run({ pullRequestUrl: "u", ci: "success" })).label).toBe("Ready to review");
@@ -54,6 +54,14 @@ describe("ticket state", () => {
       ["a2", "review"],
     ]);
     expect(needsYou(runs, new Set(["a2"])).map((n) => n.run.id)).toEqual(["c", "b"]);
+  });
+
+  it("lets merged and closed pull requests go", () => {
+    const merged = run({ id: "m", pullRequestUrl: "u", prState: "merged" });
+    expect(ticketState(merged).label).toBe("Merged");
+    expect(
+      needsYou([merged, run({ id: "c", issueKey: "#2", pullRequestUrl: "v", prState: "closed" })]),
+    ).toEqual([]);
   });
 
   it("leaves out runs that ended days ago", () => {

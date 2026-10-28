@@ -171,6 +171,7 @@ async function startServer(): Promise<void> {
 // The packaged app's id, so the taskbar groups and labels the window as MyPixelTeam
 // rather than as Electron.
 const APP_ID = "com.mypixelteam.app";
+const PR_REFRESH_MS = 5 * 60_000;
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 
 // A second launch would fail to bind the port: focus the running window instead.
@@ -249,6 +250,10 @@ function startWork(): void {
   });
   comments = new CommentWatcher({ runner, accounts, workspace });
   comments.start();
+  // Pull requests merged or closed on the code host leave "Needs you" by themselves.
+  const refresh = () => void runner?.refreshPullRequests();
+  setTimeout(refresh, 15_000);
+  setInterval(refresh, PR_REFRESH_MS);
   registerWorkIpc({
     accounts,
     workspace,

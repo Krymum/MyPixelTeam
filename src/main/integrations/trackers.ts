@@ -7,7 +7,7 @@ import type {
   NewIssue,
 } from "../../shared/work/types";
 import { HttpError, jsonClient, type Fetch } from "./http";
-import { JiraClient, pickTransition } from "./jira";
+import { JiraClient, pickTransition, type TicketGoal } from "./jira";
 
 /**
  * Where tickets live. A project uses Jira, or the GitHub Issues of its repository, so a
@@ -33,10 +33,10 @@ export interface IssueTracker {
   /** One attachment's bytes. */
   attachment(id: string): Promise<{ mimeType: string; data: Buffer }>;
   /**
-   * Moves the ticket when an agent starts or hands its work back. Returns the new status,
-   * or why nothing moved.
+   * Moves the ticket when an agent starts, hands its work back, or its pull request is
+   * merged. Returns the new status, or why nothing moved.
    */
-  advance(key: string, goal: "start" | "review"): Promise<Advance>;
+  advance(key: string, goal: TicketGoal): Promise<Advance>;
   /** Pull request text pointing at the ticket ("Closes #12" closes it on merge). */
   pullRequestReference(issue: IssueSummary): string;
   /** Pull request and commit title. */
@@ -76,10 +76,12 @@ export class JiraTracker implements IssueTracker {
     return this.jira.attachment(id);
   }
 
-  async advance(key: string, goal: "start" | "review"): Promise<Advance> {
+  async advance(key: string, goal: TicketGoal): Promise<Advance> {
     const transition = pickTransition(await this.jira.transitions(key), goal);
     if (!transition)
-      return { skipped: `no "${goal === "start" ? "in progress" : "review"}" transition` };
+      return {
+        skipped: `no "${goal === "start" ? "in progress" : goal === "done" ? "done" : "review"}" transition`,
+      };
     await this.jira.transition(key, transition.id);
     return { moved: transition.to };
   }
@@ -307,7 +309,12 @@ export class GitHubIssues implements IssueTracker {
     await this.write("POST", this.path(`/${issueNumber(key)}/comments`), { body: text });
   }
 
-  async advance(_key: string, goal: "start" | "review"): Promise<Advance> {
+  async advance(key: string, goal: TicketGoal): Promise<Advance> {
+    // A merge into another branch than the default one leaves the issue open: close it.
+    if (goal === "done") {
+      await this.transition(key, "closed:completed");
+      return { moved: "closed" };
+    }
     // GitHub issues are only open or closed; the pull request closes it when merged.
     return {
       skipped:

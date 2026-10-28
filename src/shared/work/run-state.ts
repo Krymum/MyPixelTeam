@@ -57,6 +57,8 @@ export function ticketState(run: RunView): TicketState {
     return { label: "Failed", tone: "attention" };
   }
   if (run.status === "cancelled") return { label: "Stopped", tone: "quiet" };
+  if (run.prState === "merged") return { label: "Merged", tone: "good" };
+  if (run.prState === "closed") return { label: "Pull request closed", tone: "quiet" };
   if (run.ci === "failure") return { label: "Checks failed", tone: "attention" };
   if (run.ci === "pending") return { label: "Checks running", tone: "working" };
   if (run.pullRequestUrl)
@@ -90,6 +92,8 @@ export function needsYou(
     }
     if (isActiveRun(run) || run.resumeAt || dismissed.has(run.id)) continue;
     if (run.endedAt && now - run.endedAt > STALE_AFTER_MS) continue;
+    // Merged or closed: nothing left to review.
+    if (run.prState === "merged" || run.prState === "closed") continue;
     if (run.status === "failed")
       needs.push(
         run.stoppedOnBudget

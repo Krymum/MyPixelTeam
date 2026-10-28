@@ -265,7 +265,6 @@ export const FR: Record<string, string> = {
   Repository: "Dépôt",
   Resuming: "Reprise",
   "Review it": "La relire",
-  "Review the pull request": "Relire la pull request",
   Reviewed: "Relue",
   "Same as the system": "Comme le système",
   "Same session and branch ({branch}): the agent remembers what it did.":
@@ -416,4 +415,23 @@ export const FR: Record<string, string> = {
   "{what}. Answer…": "{what}. Répondre…",
   "✓ Installed. New Claude Code sessions use them; restart running ones.":
     "✓ Installés. Les nouvelles sessions Claude Code les utilisent ; relance celles en cours.",
+  "Reading the pull request…": "Lecture de la pull request…",
+  Merge: "Fusionner",
+  "Merge the pull request of {key} into its base branch?":
+    "Fusionner la pull request de {key} dans sa branche de base ?",
+  "Close without merging": "Fermer sans fusionner",
+  "Close the pull request of {key} without merging it?":
+    "Fermer la pull request de {key} sans la fusionner ?",
+  "Open on the code host": "Ouvrir sur l’hébergeur",
+  "Conflicts with its base branch": "En conflit avec sa branche de base",
+  "It conflicts with its base branch: ask the agent to bring the base in and fix the conflicts.":
+    "Elle est en conflit avec sa branche de base : demande à l’agent d’y intégrer la base et de résoudre les conflits.",
+  "No diff to show here: open it on the code host.":
+    "Pas de diff à afficher ici : ouvre-la sur l’hébergeur.",
+  "Review the changes": "Voir les changements",
+  "{n} file changed": "{n} fichier modifié",
+  "{n} files changed": "{n} fichiers modifiés",
+  "{key} merged": "{key} fusionné",
+  Merged: "Fusionné",
+  "Pull request closed": "Pull request fermée",
 };
