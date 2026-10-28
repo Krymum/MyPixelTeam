@@ -21,8 +21,8 @@ const ids = new Set(load());
 
 export const dismissed = (): ReadonlySet<string> => ids;
 
-export function dismiss(runId: string): void {
-  ids.add(runId);
+export function dismiss(...runIds: string[]): void {
+  for (const id of runIds) ids.add(id);
   try {
     localStorage.setItem(KEY, JSON.stringify([...ids].slice(-LIMIT)));
   } catch {

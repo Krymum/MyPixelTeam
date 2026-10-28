@@ -64,12 +64,19 @@ export function ticketState(run: RunView): TicketState {
   return { label: run.planOnly ? "Planned" : "Done", tone: "quiet" };
 }
 
+/** Past this, a finished run is history rather than something to act on. */
+export const STALE_AFTER_MS = 3 * 24 * 3600_000;
+
 /**
  * What waits for the person, most pressing first: questions block an agent, failures and
  * red checks stop a ticket, pull requests wait for a review. `dismissed` holds run ids the
- * person already dealt with.
+ * person already dealt with; runs that ended days ago are left out.
  */
-export function needsYou(runs: RunView[], dismissed: ReadonlySet<string> = new Set()): Need[] {
+export function needsYou(
+  runs: RunView[],
+  dismissed: ReadonlySet<string> = new Set(),
+  now = Date.now(),
+): Need[] {
   const needs: Need[] = [];
   for (const run of latestRuns(runs)) {
     if (run.questions?.length) {
@@ -82,6 +89,7 @@ export function needsYou(runs: RunView[], dismissed: ReadonlySet<string> = new S
       continue;
     }
     if (isActiveRun(run) || run.resumeAt || dismissed.has(run.id)) continue;
+    if (run.endedAt && now - run.endedAt > STALE_AFTER_MS) continue;
     if (run.status === "failed")
       needs.push(
         run.stoppedOnBudget

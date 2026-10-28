@@ -55,6 +55,15 @@ describe("ticket state", () => {
     ]);
     expect(needsYou(runs, new Set(["a2"])).map((n) => n.run.id)).toEqual(["c", "b"]);
   });
+
+  it("leaves out runs that ended days ago", () => {
+    const now = 10 * 24 * 3600_000;
+    const runs = [
+      run({ id: "old", issueKey: "#2", status: "failed", endedAt: now - 4 * 24 * 3600_000 }),
+      run({ id: "new", issueKey: "#3", status: "failed", endedAt: now - 3600_000 }),
+    ];
+    expect(needsYou(runs, new Set(), now).map((n) => n.run.id)).toEqual(["new"]);
+  });
 });
 
 describe("markdown", () => {

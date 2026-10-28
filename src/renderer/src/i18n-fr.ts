@@ -106,6 +106,7 @@ export const FR: Record<string, string> = {
   Deny: "Refuser",
   Description: "Description",
   Disconnect: "Déconnecter",
+  "Clear all": "Tout écarter",
   Dismiss: "Écarter",
   "Don't": "Non",
   Done: "Terminé",

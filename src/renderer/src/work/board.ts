@@ -1141,17 +1141,22 @@ function renderAgents(): void {
   const sections: HTMLElement[] = [usageLine()];
   // The usage limit stops every agent at once: they go back together.
   const limited = needs.filter((n) => n.kind === "failed" && isLimitStop(n.run));
-  const all =
-    limited.length > 1
-      ? button(
-          t("Pick the {n} up again", { n: limited.length }),
-          () => {
-            for (const n of limited) void retry(n.run).catch(() => undefined);
-          },
-          "link",
-        )
-      : undefined;
-  if (needs.length) sections.push(section(t("Needs you"), needs.map(needCard), all));
+  const extras: HTMLElement[] = [];
+  if (limited.length > 1)
+    extras.push(
+      button(
+        t("Pick the {n} up again", { n: limited.length }),
+        () => {
+          for (const n of limited) void retry(n.run).catch(() => undefined);
+        },
+        "link",
+      ),
+    );
+  // Questions stay: an agent is blocked on them.
+  const clearable = needs.filter((n) => n.kind !== "question");
+  if (clearable.length > 1)
+    extras.push(button(t("Clear all"), () => dismiss(...clearable.map((n) => n.run.id)), "link"));
+  if (needs.length) sections.push(section(t("Needs you"), needs.map(needCard), ...extras));
   else sections.push(el("p", t("Nothing needs you right now."), "muted calm"));
   if (working.length) sections.push(section(t("Working now"), working.map(runCard)));
   if (rest.length) {
@@ -1169,11 +1174,10 @@ function renderAgents(): void {
   container.scrollTop = scroll;
 }
 
-function section(title: string, cards: HTMLElement[], extra?: HTMLElement): HTMLElement {
+function section(title: string, cards: HTMLElement[], ...extras: HTMLElement[]): HTMLElement {
   const box = el("section", undefined, "run-section");
   const head = el("div", undefined, "section-head");
-  head.append(el("h4", title));
-  if (extra) head.append(extra);
+  head.append(el("h4", title), ...extras);
   box.append(head, ...cards);
   return box;
 }
