@@ -6,6 +6,7 @@ import type {
   RepoSummary,
 } from "../../../shared/work/types";
 import { busy, button, el, input, select } from "../dom";
+import { t, tn } from "../i18n";
 import { PROVIDER_NAMES } from "./accounts-ui";
 import { connected, update, work } from "./store";
 import { parseTracker, trackerOptions } from "./tracker-ui";
@@ -30,9 +31,13 @@ interface Row {
 const ACCOUNT_ROWS = 25;
 
 function since(ms: number): string {
-  if (!ms) return "picked by hand";
+  if (!ms) return t("picked by hand");
   const days = Math.floor((Date.now() - ms) / 86_400_000);
-  return days < 1 ? "used today" : days === 1 ? "used yesterday" : `used ${days} days ago`;
+  return days < 1
+    ? t("used today")
+    : days === 1
+      ? t("used yesterday")
+      : t("used {n} days ago", { n: days });
 }
 
 const repoName = (fullName: string): string => fullName.split("/").pop() ?? fullName;
@@ -46,16 +51,18 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
   const localList = el("div", undefined, "discovery-list");
   const accountList = el("div", undefined, "discovery-list");
   const accountNotes = el("div", undefined, "discovery-notes");
-  const filter = input("", "Search your repositories", "search");
+  const filter = input("", t("Search your repositories"), "search");
   const rows: Row[] = [];
   let jiraProjects: JiraProject[] = [];
   /** Why Jira projects couldn't be listed, shown with the account notes. */
   let jiraError: string | undefined;
 
-  const addButton = button("Add selected projects", () => void addSelected(), "primary");
+  const addButton = button(t("Add selected projects"), () => void addSelected(), "primary");
   const refreshCount = () => {
     const n = rows.filter((r) => r.pick.checked).length;
-    addButton.textContent = n ? `Add ${n} project${n > 1 ? "s" : ""}` : "Add selected projects";
+    addButton.textContent = n
+      ? tn(n, "Add {n} project", "Add {n} projects")
+      : t("Add selected projects");
     addButton.disabled = n === 0;
   };
 
@@ -85,8 +92,8 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
       found = {
         ...found,
         problem: connected("jira")
-          ? "Jira shows no project to take its tickets from"
-          : "Connect Jira: Bitbucket projects take their tickets from it",
+          ? t("Jira shows no project to take its tickets from")
+          : t("Connect Jira: Bitbucket projects take their tickets from it"),
       };
       pick.disabled = true;
       pick.checked = false;
@@ -97,17 +104,17 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
     head.append(pick, el("strong", found.remote?.fullName ?? found.path));
     const details = found.path
       ? `${found.path} · ${since(found.lastUsed)}`
-      : `${PROVIDER_NAMES[found.repo!.provider]} · not on this computer yet: cloned on the first run`;
+      : `${PROVIDER_NAMES[found.repo!.provider]} · ${t("not on this computer yet: cloned on the first run")}`;
     card.append(head, el("div", details, "muted"));
     if (found.problem) card.append(el("div", found.problem, "bad"));
     else {
       const trackerRow = el("div", undefined, "inline");
-      trackerRow.append(el("span", "Tickets from", "muted"), tracker);
+      trackerRow.append(el("span", t("Tickets from"), "muted"), tracker);
       if (guessed)
         trackerRow.append(
           el(
             "small",
-            fromHistory ? "guessed from branches and commits" : "guessed from the name",
+            fromHistory ? t("guessed from branches and commits") : t("guessed from the name"),
             "muted",
           ),
         );
@@ -131,14 +138,16 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
       if (!card.hidden) shown++;
     }
     more.textContent =
-      matching > ACCOUNT_ROWS ? `${matching - ACCOUNT_ROWS} more: type to narrow down.` : "";
+      matching > ACCOUNT_ROWS
+        ? t("{n} more: type to narrow down.", { n: matching - ACCOUNT_ROWS })
+        : "";
   };
   const more = el("p", "", "muted");
   filter.addEventListener("input", applyFilter);
 
   async function loadAccounts(local: DiscoveredProject[]): Promise<void> {
     accountCards = [];
-    accountList.replaceChildren(el("p", "Asking your accounts…", "muted"));
+    accountList.replaceChildren(el("p", t("Asking your accounts…"), "muted"));
     const notes: HTMLElement[] = [];
     const hosts = (["github", "bitbucket"] as GitProviderId[]).filter(connected);
     const taken = [
@@ -154,8 +163,10 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
               el(
                 "p",
                 host === "bitbucket"
-                  ? "Bitbucket shows no repository: the token needs read:workspace and read:repository, and your account must be a member of the workspace."
-                  : "GitHub shows no repository: check the token's repository access.",
+                  ? t(
+                      "Bitbucket shows no repository: the token needs read:workspace and read:repository, and your account must be a member of the workspace.",
+                    )
+                  : t("GitHub shows no repository: check the token's repository access."),
                 "bad",
               ),
             );
@@ -169,12 +180,12 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
     if (jiraError) notes.push(el("p", `Jira: ${jiraError}`, "bad"));
     else if (connected("jira") && jiraProjects.length === 0)
       notes.push(
-        el("p", "Jira shows no project: check that the account can browse projects.", "bad"),
+        el("p", t("Jira shows no project: check that the account can browse projects."), "bad"),
       );
     accountNotes.replaceChildren(...notes);
     const repos = lists.flat().filter((r) => !taken.some((t) => sameRepo(t, r)));
     accountList.replaceChildren(
-      ...(repos.length ? [] : [el("p", "No other repository in your accounts.", "muted")]),
+      ...(repos.length ? [] : [el("p", t("No other repository in your accounts."), "muted")]),
     );
     for (const repo of repos) {
       const ref = {
@@ -196,7 +207,7 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
   async function search(): Promise<void> {
     rows.length = 0;
     jiraError = undefined;
-    localList.replaceChildren(el("p", "Looking at the folders Claude Code worked in…", "muted"));
+    localList.replaceChildren(el("p", t("Looking at the folders Claude Code worked in…"), "muted"));
     const found = await busy(undefined, status, async () => {
       const [projects, discovered] = await Promise.all([
         connected("jira")
@@ -219,7 +230,7 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
     localList.replaceChildren(
       ...(found.length
         ? found.map((f) => rowFor(f, true))
-        : [el("p", "Nothing new in the folders Claude Code worked in.", "muted")]),
+        : [el("p", t("Nothing new in the folders Claude Code worked in."), "muted")]),
     );
     refreshCount();
     await loadAccounts(found);
@@ -231,7 +242,7 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
     if (!path) return;
     const found = await busy(undefined, status, () => api().inspectFolder(path));
     if (found === undefined) {
-      if (!status.textContent) status.textContent = "This repository is already a project.";
+      if (!status.textContent) status.textContent = t("This repository is already a project.");
       return;
     }
     if (!rows.length) localList.replaceChildren();
@@ -245,7 +256,9 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
       for (const { found, tracker } of chosen) {
         const choice = parseTracker(tracker.value);
         if (!choice)
-          throw new Error(`Choose where the tickets of ${found.repo?.fullName} come from`);
+          throw new Error(
+            t("Choose where the tickets of {repo} come from", { repo: found.repo?.fullName ?? "" }),
+          );
         const workspace = await api().saveProject({
           name: repoName(found.repo!.fullName),
           tracker: choice,
@@ -263,18 +276,20 @@ export function discoveryPanel(onAdded: () => void): HTMLElement {
   const actions = el("div", undefined, "actions");
   actions.append(
     addButton,
-    button("Add a folder…", () => void addFolder()),
-    button("Search again", () => void search()),
+    button(t("Add a folder…"), () => void addFolder()),
+    button(t("Search again"), () => void search()),
   );
   panel.append(
-    el("h4", "On this computer"),
+    el("h4", t("On this computer")),
     el(
       "p",
-      "Repositories where you used Claude Code lately. Agents work in worktrees, never in these folders.",
+      t(
+        "Repositories where you used Claude Code lately. Agents work in worktrees, never in these folders.",
+      ),
       "muted",
     ),
     localList,
-    el("h4", "In your accounts"),
+    el("h4", t("In your accounts")),
     accountNotes,
     filter,
     accountList,

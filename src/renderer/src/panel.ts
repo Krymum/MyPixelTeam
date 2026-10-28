@@ -2,6 +2,7 @@ import type { AgentRecord } from "../../shared/engine/office-state";
 import { ticketState } from "../../shared/work/run-state";
 import type { RunView } from "../../shared/work/types";
 import { button, el, formatDuration, link } from "./dom";
+import { locale, t } from "./i18n";
 
 /**
  * Side panel of the selected character: for an agent of the app, its ticket and what it is
@@ -19,7 +20,7 @@ export function renderPanel(
   if (!agent) return;
 
   const close = el("button", "✕", "close");
-  close.title = "Close";
+  close.title = t("Close");
   close.addEventListener("click", onClose);
 
   const top: HTMLElement[] = [];
@@ -29,33 +30,36 @@ export function renderPanel(
     const ticket = el("div", undefined, "panel-ticket");
     ticket.append(
       button(`${view.issueKey} · ${view.issueSummary}`, run.openIssue, "link"),
-      el("span", state.label, `chip ${state.tone}`),
+      el("span", t(state.label, state.vars), `chip ${state.tone}`),
     );
     top.push(ticket);
     const waiting = view.questions?.[0];
     // Answered on the ticket: this panel redraws every second, which would eat typing.
-    if (waiting) top.push(button(`✋ ${waiting.summary}. Answer…`, run.openIssue, "primary"));
-    if (view.pullRequestUrl) top.push(link("Open the pull request", view.pullRequestUrl));
+    if (waiting)
+      top.push(
+        button(`✋ ${t("{what}. Answer…", { what: waiting.summary })}`, run.openIssue, "primary"),
+      );
+    if (view.pullRequestUrl) top.push(link(t("Open the pull request"), view.pullRequestUrl));
   }
 
   const facts: [string, string][] = [
-    ["status", agent.status],
-    ["on duty", formatDuration(Date.now() - agent.startedAt)],
-    ["role", agent.role],
-    ["source", agent.source],
-    ["session", agent.sessionId],
+    [t("status"), agent.status],
+    [t("on duty"), formatDuration(Date.now() - agent.startedAt)],
+    [t("role"), agent.role],
+    [t("source"), agent.source],
+    [t("session"), agent.sessionId],
   ];
-  if (parentName) facts.push(["parent", parentName]);
-  if (agent.cwd) facts.push(["folder", agent.cwd]);
+  if (parentName) facts.push([t("parent"), parentName]);
+  if (agent.cwd) facts.push([t("folder"), agent.cwd]);
   const dl = el("dl");
   for (const [k, v] of facts) dl.append(el("dt", k), el("dd", v));
   const details = el("details", undefined, "session-details");
-  details.append(el("summary", "Session details"), dl);
+  details.append(el("summary", t("Session details")), dl);
 
   const ol = el("ol");
   for (const e of [...agent.history].reverse().slice(0, 30)) {
     const li = el("li");
-    const time = el("time", new Date(e.timestamp).toLocaleTimeString());
+    const time = el("time", new Date(e.timestamp).toLocaleTimeString(locale()));
     const text = [e.type.replace(/^(sub)?agent\./, ""), e.detail.summary ?? e.detail.message]
       .filter(Boolean)
       .join(" · ");
@@ -71,7 +75,7 @@ export function renderPanel(
     el("h2", run ? run.view.issueKey : agent.name),
     ...top,
     details,
-    el("h3", "What it did"),
+    el("h3", t("What it did")),
     ol,
   );
 }

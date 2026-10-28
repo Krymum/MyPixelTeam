@@ -81,6 +81,11 @@ function publish(raw: OfficeEvent): void {
 }
 
 function createWindow(): void {
+  const icon = join(
+    app.getAppPath(),
+    "resources",
+    process.platform === "win32" ? "icon.ico" : "icon.png",
+  );
   win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -88,11 +93,7 @@ function createWindow(): void {
     minHeight: 600,
     title: "MyPixelTeam",
     // Windows' taskbar takes its sizes from the .ico; elsewhere the PNG.
-    icon: join(
-      app.getAppPath(),
-      "resources",
-      process.platform === "win32" ? "icon.ico" : "icon.png",
-    ),
+    icon,
     backgroundColor: "#1c1721",
     autoHideMenuBar: true,
     webPreferences: {
@@ -102,13 +103,20 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
+  // The taskbar button takes its icon from these details rather than from electron.exe,
+  // so it stays right however the app was started.
+  if (process.platform === "win32")
+    win.setAppDetails({ appId: APP_ID, appIconPath: icon, appIconIndex: 0 });
   win.on("closed", () => (win = null));
   // Never navigate away from the office; open external links in the browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://")) void shell.openExternal(url);
     return { action: "deny" };
   });
-  win.webContents.on("will-navigate", (e) => e.preventDefault());
+  // Reloading the office itself stays allowed: switching the language does it.
+  win.webContents.on("will-navigate", (e) => {
+    if (e.url !== win?.webContents.getURL()) e.preventDefault();
+  });
   // Surface renderer errors in the terminal.
   win.webContents.on("console-message", (e) => {
     if (e.level === "error")
@@ -162,7 +170,8 @@ async function startServer(): Promise<void> {
 // Windows shows notifications under this name.
 // The packaged app's id, so the taskbar groups and labels the window as MyPixelTeam
 // rather than as Electron.
-if (process.platform === "win32") app.setAppUserModelId("com.mypixelteam.app");
+const APP_ID = "com.mypixelteam.app";
+if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 
 // A second launch would fail to bind the port: focus the running window instead.
 if (!app.requestSingleInstanceLock()) app.quit();

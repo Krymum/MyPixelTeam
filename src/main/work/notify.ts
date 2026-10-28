@@ -1,7 +1,7 @@
-import { Notification, type BrowserWindow } from "electron";
+import { app, Notification, type BrowserWindow } from "electron";
 import type { OfficeEvent } from "../../shared/protocol/schema";
 import type { RunView } from "../../shared/work/types";
-import { runNotice, waitingNotice, type Notice } from "./notices";
+import { runNotice, waitingNotice, type Notice, type NoticeLanguage } from "./notices";
 
 /**
  * Desktop notifications, so agents can be left alone: a run that ends, or an agent that
@@ -10,6 +10,12 @@ import { runNotice, waitingNotice, type Notice } from "./notices";
 
 /** One "waiting" notification per agent per minute is plenty. */
 const WAITING_QUIET_MS = 60_000;
+
+/** The system's language: the one picked in the app's settings lives in the window. */
+const language = (): NoticeLanguage =>
+  (app.getPreferredSystemLanguages()[0] ?? app.getLocale()).toLowerCase().startsWith("fr")
+    ? "fr"
+    : "en";
 
 export class Notifier {
   private readonly lastWaiting = new Map<string, number>();
@@ -24,13 +30,13 @@ export class Notifier {
   ) {}
 
   run(run: RunView): void {
-    const notice = runNotice(run);
+    const notice = runNotice(run, language());
     if (notice) this.show(notice, () => this.options.openIssue(run));
   }
 
   /** `run`: the agent works on a ticket; clicking opens it, where the question is answered. */
   event(event: OfficeEvent, run?: RunView): void {
-    const notice = waitingNotice(event);
+    const notice = waitingNotice(event, language());
     if (!notice) return;
     const now = Date.now();
     if (now - (this.lastWaiting.get(event.agentId) ?? 0) < WAITING_QUIET_MS) return;

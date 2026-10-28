@@ -11,10 +11,11 @@ import {
   type RepoSummary,
 } from "../../../shared/work/types";
 import { busy, button, el, field, input, select, textarea } from "../dom";
+import { languageChoice, setLanguage, t, type LanguageChoice } from "../i18n";
 import { accountCard, PROVIDER_NAMES } from "./accounts-ui";
 import { discoveryPanel } from "./discovery";
 import { hooksCard } from "./hooks-ui";
-import { MODEL_HINT, modelSelect } from "./model-ui";
+import { modelHint, modelSelect } from "./model-ui";
 import { connected, update, work } from "./store";
 import { parseTracker, trackerOptions, trackerValue } from "./tracker-ui";
 import { openWelcome } from "./welcome";
@@ -23,11 +24,11 @@ import { openWelcome } from "./welcome";
 
 const api = () => window.office.work;
 
-const PERMISSION_LABELS: Record<PermissionMode, string> = {
-  acceptEdits: "Edit files freely, ask me before running commands",
-  auto: "Auto mode: Claude Code judges each command, asks me when unsure",
-  bypassPermissions: "Everything, unchecked (sandboxed machines only)",
-};
+const permissionLabels = (): Record<PermissionMode, string> => ({
+  acceptEdits: t("Edit files freely, ask me before running commands"),
+  auto: t("Auto mode: Claude Code judges each command, asks me when unsure"),
+  bypassPermissions: t("Everything, unchecked (sandboxed machines only)"),
+});
 
 let dialog: HTMLDialogElement;
 /** Project being edited; null for a new one, undefined when the list is shown. */
@@ -53,10 +54,10 @@ export function initSettings(node: HTMLDialogElement): void {
 
 function render(): void {
   const close = button("✕", () => dialog.close(), "close");
-  close.title = "Close";
+  close.title = t("Close");
   dialog.replaceChildren(
     close,
-    el("h2", "Settings"),
+    el("h2", t("Settings")),
     accountsSection(),
     discovering
       ? discoverySection()
@@ -69,10 +70,10 @@ function render(): void {
 
 function accountsSection(): HTMLElement {
   const section = el("section");
-  section.append(el("h3", "Accounts"));
+  section.append(el("h3", t("Accounts")));
   if (!work.accounts.secureStorage)
     section.append(
-      el("p", "This system offers no secure storage: accounts can't be saved.", "bad"),
+      el("p", t("This system offers no secure storage: accounts can't be saved."), "bad"),
     );
   for (const provider of ["jira", "github", "bitbucket"] as const)
     section.append(accountCard(provider, render));
@@ -81,13 +82,15 @@ function accountsSection(): HTMLElement {
 
 function projectsSection(): HTMLElement {
   const section = el("section");
-  section.append(el("h3", "Projects"));
+  section.append(el("h3", t("Projects")));
   const { projects } = work.workspace;
   if (!projects.length)
     section.append(
       el(
         "p",
-        "A project is a repository and where its tickets live: its GitHub Issues, or a Jira project. Agents work on those tickets.",
+        t(
+          "A project is a repository and where its tickets live: its GitHub Issues, or a Jira project. Agents work on those tickets.",
+        ),
         "muted",
       ),
     );
@@ -98,21 +101,25 @@ function projectsSection(): HTMLElement {
       el("strong", p.name),
       el(
         "div",
-        `${p.repo.fullName} (${PROVIDER_NAMES[p.repo.provider]}) · tickets: ${trackerLabel(p.tracker)}`,
+        t("{repo} ({host}) · tickets: {tracker}", {
+          repo: p.repo.fullName,
+          host: PROVIDER_NAMES[p.repo.provider],
+          tracker: trackerLabel(p.tracker),
+        }),
         "muted",
       ),
     );
     row.append(
       text,
-      button("Edit", () => openSettings(p.id)),
+      button(t("Edit"), () => openSettings(p.id)),
     );
     section.append(row);
   }
-  const detect = button("Find my projects", () => openSettings("discover"), "primary");
-  const add = button("+ New project", () => openSettings(null));
+  const detect = button(t("Find my projects"), () => openSettings("discover"), "primary");
+  const add = button(t("+ New project"), () => openSettings(null));
   for (const b of [detect, add]) {
     b.disabled = !(connected("github") || connected("bitbucket"));
-    if (b.disabled) b.title = "Connect GitHub or Bitbucket first";
+    if (b.disabled) b.title = t("Connect GitHub or Bitbucket first");
   }
   const actions = el("div", undefined, "actions");
   actions.append(detect, add);
@@ -123,9 +130,9 @@ function projectsSection(): HTMLElement {
 function discoverySection(): HTMLElement {
   const section = el("section");
   section.append(
-    el("h3", "Find my projects"),
+    el("h3", t("Find my projects")),
     discoveryPanel(() => openSettings(undefined)),
-    button("← Projects", () => openSettings(undefined)),
+    button(`← ${t("Projects")}`, () => openSettings(undefined)),
   );
   return section;
 }
@@ -138,7 +145,7 @@ function preferencesSection(): HTMLElement {
     update({ workspace: await api().setPreferences({ notifications: notify.checked }) });
   });
   const label = el("label", undefined, "check");
-  label.append(notify, " Notify me when an agent finishes, fails or waits for me");
+  label.append(notify, ` ${t("Notify me when an agent finishes, fails or waits for me")}`);
   const agents = select(
     Array.from({ length: MAX_AGENTS }, (_, i): [string, string] => [String(i + 1), String(i + 1)]),
     String(work.workspace.maxAgents),
@@ -153,7 +160,7 @@ function preferencesSection(): HTMLElement {
       ["3", "$3"],
       ["5", "$5"],
       ["10", "$10"],
-      ["0", "No limit"],
+      ["0", t("No limit")],
     ],
     String(work.workspace.runBudgetUsd),
   );
@@ -168,7 +175,7 @@ function preferencesSection(): HTMLElement {
   const fixCiLabel = el("label", undefined, "check");
   fixCiLabel.append(
     fixCi,
-    ` When a pull request's checks fail, put its agent back on it (${MAX_CI_FIXES} times at most)`,
+    ` ${t("When a pull request's checks fail, put its agent back on it ({n} times at most)", { n: MAX_CI_FIXES })}`,
   );
   const commands = input("", "", "checkbox");
   commands.checked = work.workspace.commentCommands;
@@ -178,27 +185,41 @@ function preferencesSection(): HTMLElement {
   const commandsLabel = el("label", undefined, "check");
   commandsLabel.append(
     commands,
-    " A comment starting with @agent on a ticket or its pull request puts its agent back on it",
+    ` ${t("A comment starting with @agent on a ticket or its pull request puts its agent back on it")}`,
   );
-  const guide = button("Open the setup guide", () => {
+  const languages = select(
+    [
+      ["auto", t("Same as the system")],
+      ["en", "English"],
+      ["fr", "Français"],
+    ],
+    languageChoice(),
+  );
+  languages.addEventListener("change", () => setLanguage(languages.value as LanguageChoice));
+  const guide = button(t("Open the setup guide"), () => {
     dialog.close();
     openWelcome();
   });
   section.append(
-    el("h3", "Preferences"),
+    el("h3", t("Preferences")),
     field(
-      "Agents working at once",
+      t("Agents working at once"),
       agents,
-      "More tickets wait their turn. Every agent draws on the same Claude quota, so several at once reach its limit sooner.",
+      t(
+        "More tickets wait their turn. Every agent draws on the same Claude quota, so several at once reach its limit sooner.",
+      ),
     ),
     field(
-      "Budget per run",
+      t("Budget per run"),
       budget,
-      "An agent that reaches it stops and keeps its changes; continuing the run gives it the same budget again.",
+      t(
+        "An agent that reaches it stops and keeps its changes; continuing the run gives it the same budget again.",
+      ),
     ),
     fixCiLabel,
     commandsLabel,
     label,
+    field(t("Language"), languages),
     hooksCard(),
     guide,
   );
@@ -207,10 +228,10 @@ function preferencesSection(): HTMLElement {
 
 function projectEditor(project: Project | null): HTMLElement {
   const section = el("section");
-  section.append(el("h3", project ? `Edit ${project.name}` : "New project"));
+  section.append(el("h3", project ? t("Edit {name}", { name: project.name }) : t("New project")));
   const status = el("p", "", "status");
 
-  const name = input(project?.name ?? "", "My product");
+  const name = input(project?.name ?? "", t("My product"));
   const trackerSelect = select([]);
   let jiraProjects: JiraProject[] = [];
   const hosts = (["github", "bitbucket"] as const).filter(connected);
@@ -218,29 +239,32 @@ function projectEditor(project: Project | null): HTMLElement {
     hosts.map((h) => [h, PROVIDER_NAMES[h]]),
     project?.repo.provider ?? hosts[0],
   );
-  const repoInput = input(project?.repo.fullName ?? "", "owner/repository");
+  const repoInput = input(project?.repo.fullName ?? "", t("owner/repository"));
   const repoList = el("datalist");
   repoList.id = "repo-list";
   repoInput.setAttribute("list", repoList.id);
   const folder = input(project?.localPath ?? "", "");
   const baseBranch = input(project?.baseBranch ?? "", "");
-  const browse = button("Browse…", async () => {
+  const browse = button(t("Browse…"), async () => {
     const picked = await api().pickFolder();
     if (picked) folder.value = picked;
   });
   const folderRow = el("div", undefined, "inline");
   folderRow.append(folder, browse);
   const mode = select(
-    Object.entries(PERMISSION_LABELS) as [string, string][],
+    Object.entries(permissionLabels()) as [string, string][],
     project?.agent.permissionMode ?? "acceptEdits",
   );
   const model = modelSelect(project?.agent.model);
   const instructions = textarea(project?.agent.instructions ?? "", 4);
-  instructions.placeholder = "e.g. Run npm test before finishing. Write commit-ready code.";
+  instructions.placeholder = t("e.g. Run npm test before finishing. Write commit-ready code.");
   const openPr = input("", "", "checkbox");
   openPr.checked = project?.agent.openPullRequest ?? true;
   const prLabel = el("label", undefined, "check");
-  prLabel.append(openPr, " Push the branch, open a pull request and move the ticket to review");
+  prLabel.append(
+    openPr,
+    ` ${t("Push the branch, open a pull request and move the ticket to review")}`,
+  );
 
   // Repositories of the selected host, and the default clone folder of the chosen one.
   let repos: RepoSummary[] = [];
@@ -255,21 +279,23 @@ function projectEditor(project: Project | null): HTMLElement {
   const refreshPlaceholder = async () => {
     const repo = findRepo();
     baseBranch.placeholder = repo
-      ? `Empty: the repository's default (${repo.defaultBranch})`
-      : "Pick a repository first";
+      ? t("Empty: the repository's default ({branch})", { branch: repo.defaultBranch })
+      : t("Pick a repository first");
     folder.placeholder = repo
-      ? `Empty: clone into ${await api().defaultPath(repo.provider, repo.fullName)}`
-      : "Pick a repository first";
+      ? t("Empty: clone into {path}", {
+          path: await api().defaultPath(repo.provider, repo.fullName),
+        })
+      : t("Pick a repository first");
   };
   const loadRepos = () =>
     void busy(undefined, status, async () => {
-      repoList.replaceChildren(el("option", "Loading…"));
+      repoList.replaceChildren(el("option", t("Loading…")));
       repos = await api().repos(host.value as GitProviderId);
       repoList.replaceChildren(
         ...repos.map((r) => {
           const o = el("option");
           o.value = r.fullName;
-          o.label = r.private ? "private" : "public";
+          o.label = r.private ? t("private") : t("public");
           return o;
         }),
       );
@@ -280,7 +306,8 @@ function projectEditor(project: Project | null): HTMLElement {
     const current = trackerSelect.value || (project ? trackerValue(project.tracker) : "");
     const options = trackerOptions(host.value as GitProviderId, jiraProjects);
     trackerSelect.replaceChildren(
-      ...select(options.length ? options : [["", "Connect Jira for Bitbucket projects"]]).options,
+      ...select(options.length ? options : [["", t("Connect Jira for Bitbucket projects")]])
+        .options,
     );
     if (options.some(([v]) => v === current)) trackerSelect.value = current;
   };
@@ -299,13 +326,13 @@ function projectEditor(project: Project | null): HTMLElement {
     });
 
   const save = button(
-    "Save",
+    t("Save"),
     () =>
       void busy(save, status, async () => {
         const repo = findRepo();
-        if (!repo) throw new Error("Choose a repository from the list");
+        if (!repo) throw new Error(t("Choose a repository from the list"));
         const tracker = parseTracker(trackerSelect.value);
-        if (!tracker) throw new Error("Choose where the tickets come from");
+        if (!tracker) throw new Error(t("Choose where the tickets come from"));
         const input: ProjectInput = {
           id: project?.id,
           name: name.value.trim() || repo.fullName,
@@ -331,14 +358,20 @@ function projectEditor(project: Project | null): HTMLElement {
       }),
     "primary",
   );
-  const cancel = button("Cancel", () => openSettings(undefined));
+  const cancel = button(t("Cancel"), () => openSettings(undefined));
   const actions = el("div", undefined, "actions");
   actions.append(save, cancel);
   if (project) {
     const remove = button(
-      "Delete",
+      t("Delete"),
       () => {
-        if (!confirm(`Delete the project "${project.name}"? Its clone and worktrees stay on disk.`))
+        if (
+          !confirm(
+            t('Delete the project "{name}"? Its clone and worktrees stay on disk.', {
+              name: project.name,
+            }),
+          )
+        )
           return;
         void busy(remove, status, async () => {
           update({ workspace: await api().deleteProject(project.id) });
@@ -351,28 +384,32 @@ function projectEditor(project: Project | null): HTMLElement {
   }
 
   section.append(
-    field("Name", name),
-    field("Code host", host),
-    field("Repository", repoInput),
+    field(t("Name"), name),
+    field(t("Code host"), host),
+    field(t("Repository"), repoInput),
     repoList,
-    field("Tickets from", trackerSelect),
+    field(t("Tickets from"), trackerSelect),
     field(
-      "Local folder",
+      t("Local folder"),
       folderRow,
-      "An existing clone of this repository, or empty to let the app clone it. Agents work in separate worktrees, never in this folder.",
+      t(
+        "An existing clone of this repository, or empty to let the app clone it. Agents work in separate worktrees, never in this folder.",
+      ),
     ),
     field(
-      "Base branch",
+      t("Base branch"),
       baseBranch,
-      "New ticket branches start from it and pull requests target it, e.g. develop.",
+      t("New ticket branches start from it and pull requests target it, e.g. develop."),
     ),
     field(
-      "Agent permissions",
+      t("Agent permissions"),
       mode,
-      "What the mode doesn't allow on its own, the agent asks you in the office: its character raises its hand and the ticket shows Allow / Deny.",
+      t(
+        "What the mode doesn't allow on its own, the agent asks you in the office: its character raises its hand and the ticket shows Allow / Deny.",
+      ),
     ),
-    field("Model", model, `${MODEL_HINT} Each ticket can pick another one.`),
-    field("Instructions for every ticket", instructions),
+    field(t("Model"), model, t("{hint} Each ticket can pick another one.", { hint: modelHint() })),
+    field(t("Instructions for every ticket"), instructions),
     prLabel,
     actions,
     status,

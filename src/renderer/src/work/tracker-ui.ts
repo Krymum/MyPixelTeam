@@ -1,4 +1,5 @@
 import type { GitProviderId, JiraProject, Tracker } from "../../../shared/work/types";
+import { t } from "../i18n";
 
 /** The "Tickets from" choice: GitHub Issues (GitHub repositories only) or a Jira project. */
 
@@ -15,7 +16,7 @@ export function trackerOptions(
   ];
   return [
     ...(provider === "github"
-      ? [["github", "GitHub Issues of the repository"] as [string, string]]
+      ? [["github", t("GitHub Issues of the repository")] as [string, string]]
       : []),
     ...jira.map((p): [string, string] => [`jira:${p.key}`, `Jira · ${p.key} · ${p.name}`]),
   ];

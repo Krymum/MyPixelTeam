@@ -36,6 +36,13 @@ describe("runNotice", () => {
     });
   });
 
+  it("speaks French on a French system", () => {
+    expect(runNotice(run({ pullRequestUrl: "https://x/pr/1" }), "fr")?.title).toBe(
+      "PROJ-7 : pull request prête",
+    );
+    expect(runNotice(run({ status: "failed" }), "fr")?.title).toBe("PROJ-7 : l’agent a échoué");
+  });
+
   it("stays quiet for runs still going or stopped by hand", () => {
     expect(runNotice(run({ status: "running" }))).toBeUndefined();
     expect(runNotice(run({ status: "cancelled" }))).toBeUndefined();

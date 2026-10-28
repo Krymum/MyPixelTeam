@@ -1,5 +1,6 @@
 import { parseMarkdown, type Inline } from "../../shared/markdown";
 import { button, el, link } from "./dom";
+import { t } from "./i18n";
 
 /** Ticket text and agent summaries, readable: Markdown turned into DOM nodes. */
 
@@ -75,10 +76,10 @@ export function foldedMarkdown(text: string, lines = 8): HTMLElement {
   box.classList.add("closed");
   box.style.setProperty("--fold-lines", String(lines));
   const toggle = button(
-    "Read more",
+    t("Read more"),
     () => {
       const closed = box.classList.toggle("closed");
-      toggle.textContent = closed ? "Read more" : "Show less";
+      toggle.textContent = closed ? t("Read more") : t("Show less");
     },
     "link",
   );

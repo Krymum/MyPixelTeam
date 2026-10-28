@@ -1,5 +1,6 @@
 import type { QuestionAnswer, RunView } from "../../../shared/work/types";
 import { busy, button, el, input } from "../dom";
+import { t } from "../i18n";
 
 /**
  * What a waiting agent asks, with Allow and Deny. The agent is paused until it gets an
@@ -18,7 +19,7 @@ export function questionsBox(run: RunView): HTMLElement | undefined {
   for (const q of questions) {
     const card = el("div", undefined, "question");
     const status = el("p", "", "status");
-    const reason = input(drafts.get(q.id) ?? "", "Reason if you refuse (sent to the agent)");
+    const reason = input(drafts.get(q.id) ?? "", t("Reason if you refuse (sent to the agent)"));
     reason.addEventListener("input", () => drafts.set(q.id, reason.value));
     const answer = (choice: QuestionAnswer) =>
       void busy(undefined, status, async () => {
@@ -31,18 +32,21 @@ export function questionsBox(run: RunView): HTMLElement | undefined {
         drafts.delete(q.id);
       });
     const actions = el("div", undefined, "actions");
-    actions.append(button("Allow", () => answer("allow"), "primary"));
+    actions.append(button(t("Allow"), () => answer("allow"), "primary"));
     // Claude Code's own rule for this call ("npm test:*"), for this run only.
     if (q.alwaysRule) {
-      const always = button(`Always allow for this run`, () => answer("always"));
-      always.title = `Allows ${q.alwaysRule} without asking until this run ends`;
+      const always = button(t("Always allow for this run"), () => answer("always"));
+      always.title = t("Allows {rule} without asking until this run ends", { rule: q.alwaysRule });
       actions.append(always);
     }
-    actions.append(button("Deny", () => answer("deny"), "danger"));
-    card.append(el("strong", `✋ ${run.issueKey} asks to use ${q.tool}`));
+    actions.append(button(t("Deny"), () => answer("deny"), "danger"));
+    card.append(
+      el("strong", `✋ ${t("{key} asks to use {tool}", { key: run.issueKey, tool: q.tool })}`),
+    );
     if (q.reason) card.append(el("div", q.reason, "muted"));
     card.append(el("pre", q.detail, "log"));
-    if (q.alwaysRule) card.append(el("small", `"Always" allows: ${q.alwaysRule}`, "muted"));
+    if (q.alwaysRule)
+      card.append(el("small", t('"Always" allows: {rule}', { rule: q.alwaysRule }), "muted"));
     card.append(reason, actions, status);
     box.append(card);
   }

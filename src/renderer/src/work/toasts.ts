@@ -1,6 +1,7 @@
 import { isLimitStop } from "../../../shared/work/run-state";
 import type { RunView } from "../../../shared/work/types";
 import { button, el, link } from "../dom";
+import { t } from "../i18n";
 import { showIssue } from "./board";
 import { subscribe, work } from "./store";
 
@@ -35,28 +36,35 @@ function announce(run: RunView, before: Pick<RunView, "status" | "ci">): void {
   const open = () => void showIssue(run.projectId, run.issueKey);
   if (before.status !== "done" && run.status === "done") {
     if (run.pullRequestUrl)
-      return toast("good", `${run.issueKey} opened a pull request`, run.issueSummary, {
-        label: "Review it",
-        href: run.pullRequestUrl,
-      });
+      return toast(
+        "good",
+        t("{key} opened a pull request", { key: run.issueKey }),
+        run.issueSummary,
+        {
+          label: t("Review it"),
+          href: run.pullRequestUrl,
+        },
+      );
     return toast(
       "good",
-      run.planOnly ? `${run.issueKey} is broken down` : `${run.issueKey} is done`,
+      run.planOnly
+        ? t("{key} is broken down", { key: run.issueKey })
+        : t("{key} is done", { key: run.issueKey }),
       run.issueSummary,
       {
-        label: "Open",
+        label: t("Open"),
         onClick: open,
       },
     );
   }
   if (before.ci === "pending" && run.ci === "success")
-    return toast("good", `${run.issueKey}: checks passed`, run.issueSummary, {
-      label: "Review it",
+    return toast("good", t("{key}: checks passed", { key: run.issueKey }), run.issueSummary, {
+      label: t("Review it"),
       href: run.pullRequestUrl,
     });
   if (before.status !== "failed" && run.status === "failed" && !run.resumeAt && !isLimitStop(run))
-    toast("bad", `${run.issueKey} stopped`, run.error ?? run.issueSummary, {
-      label: "Open",
+    toast("bad", t("{key} stopped", { key: run.issueKey }), run.error ?? run.issueSummary, {
+      label: t("Open"),
       onClick: open,
     });
 }
@@ -71,7 +79,7 @@ function toast(
   const body = el("div", undefined, "toast-body");
   body.append(el("strong", title), el("span", text, "muted"));
   const close = button("✕", () => card.remove(), "close");
-  close.title = "Close";
+  close.title = t("Close");
   card.append(body);
   if (action.href) card.append(link(action.label, action.href));
   else if (action.onClick)
