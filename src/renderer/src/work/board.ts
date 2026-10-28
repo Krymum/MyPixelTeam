@@ -10,7 +10,16 @@ import {
   type IssueSummary,
   type RunView,
 } from "../../../shared/work/types";
+import {
+  isLimitStop,
+  latestRuns,
+  needsYou,
+  ticketState,
+  type Need,
+} from "../../../shared/work/run-state";
 import { busy, button, el, field, formatDuration, input, link, select, textarea } from "../dom";
+import { foldedMarkdown } from "../markdown";
+import { dismiss, dismissed } from "./dismissed";
 import { modelSelect } from "./model-ui";
 import { questionsBox } from "./questions-ui";
 import { openSettings } from "./settings";
@@ -29,7 +38,13 @@ let query = { text: "", includeDone: false };
 let issues: IssueSummary[] | undefined;
 /** Re-renders the agent box of the open ticket when runs change. */
 let refreshAgentBox: (() => void) | undefined;
+/** Redraws the list's rows, whose badges show what each ticket's agent is doing. */
+let refreshList: (() => void) | undefined;
 const expandedLogs = new Set<string>();
+/** Tickets whose agent options are unfolded, by "<project>:<key>". */
+const openOptions = new Set<string>();
+/** The Agents tab also shows older runs of each ticket. */
+let showHistory = false;
 /** Issues from untrusted authors the person read and accepted ("<project>:<key>"). */
 const confirmedUntrusted = new Set<string>();
 /** The ticket's branches on origin, looked up once per opening of the ticket. */
@@ -43,10 +58,18 @@ const chosenModel = new Map<string, string>();
 
 export function initBoard(node: HTMLElement): void {
   board = node;
+  document.addEventListener("keydown", (e) => {
+    // From the search box too; a text area or a menu keeps its arrows.
+    const target = e.target as HTMLElement;
+    if (!board.hidden && !target.closest("textarea, select, dialog")) moveInList(e);
+  });
   subscribe(() => {
     if (board.hidden) return;
     if (tab === "agents") renderAgents();
-    else refreshAgentBox?.();
+    else {
+      refreshAgentBox?.();
+      refreshList?.();
+    }
   });
 }
 
@@ -60,6 +83,36 @@ export function resetBoard(): void {
   view = { kind: "list" };
   issues = undefined;
   if (!board.hidden) render();
+}
+
+/** "/" from anywhere: the ticket list, ready to type. */
+export function focusSearch(): void {
+  tab = "tickets";
+  view = { kind: "list" };
+  toggleBoard(true);
+  board.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
+}
+
+/** Escape: a ticket goes back to the list, the list closes the board. False when closed. */
+export function boardBack(): boolean {
+  if (board.hidden) return false;
+  if (tab === "tickets" && view.kind !== "list") {
+    view = { kind: "list" };
+    render();
+  } else toggleBoard(false);
+  return true;
+}
+
+/** Up and down move between the rows of the list. */
+function moveInList(e: KeyboardEvent): void {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  const rows = [...board.querySelectorAll<HTMLElement>("ul.issues .row-main")];
+  if (!rows.length) return;
+  const at = rows.indexOf(document.activeElement as HTMLElement);
+  const next = e.key === "ArrowDown" ? Math.min(at + 1, rows.length - 1) : Math.max(at - 1, 0);
+  if (at === -1 && e.key === "ArrowUp") return;
+  e.preventDefault();
+  rows[at === -1 ? 0 : next]!.focus();
 }
 
 /** Opens the Agents tab, where waiting agents are listed with their questions. */
@@ -81,13 +134,14 @@ export async function showIssue(projectId: string, key: string): Promise<void> {
 
 function render(): void {
   refreshAgentBox = undefined;
+  refreshList = undefined;
   const close = button("✕", () => toggleBoard(false), "close");
   close.title = "Close";
   const tabs = el("nav", undefined, "tabs");
-  const active = work.runs.filter(isActiveRun).length;
+  const needs = needsYou(work.runs, dismissed()).length;
   for (const [id, label] of [
     ["tickets", "Tickets"],
-    ["agents", `Agents${active ? ` (${active})` : ""}`],
+    ["agents", `Agents${needs ? ` (${needs})` : ""}`],
   ] as const) {
     const t = button(label, () => {
       tab = id;
@@ -150,10 +204,21 @@ function renderList(): void {
       if (!issues) list.replaceChildren();
     });
   const showIssues = () => {
+    if (!issues!.length) return void list.replaceChildren(el("li", "No tickets.", "muted"));
+    // Tickets sit under their epic when both are listed.
+    const listed = new Set(issues!.map((i) => i.key));
+    const children = new Map<string, IssueSummary[]>();
+    for (const i of issues!)
+      if (i.parentKey && listed.has(i.parentKey))
+        children.set(i.parentKey, [...(children.get(i.parentKey) ?? []), i]);
     list.replaceChildren(
-      ...(issues!.length ? issues!.map(issueRow) : [el("li", "No tickets.", "muted")]),
+      ...issues!
+        .filter((i) => !i.parentKey || !listed.has(i.parentKey))
+        .map((i) => issueRow(i, children.get(i.key) ?? [])),
     );
   };
+  // Agents start and finish while the list is open: their badges follow.
+  refreshList = () => issues && showIssues();
   search.addEventListener("keydown", (e) => e.key === "Enter" && load());
   done.addEventListener("change", load);
 
@@ -191,26 +256,66 @@ function heading(name: string, source: string): HTMLElement {
   return h;
 }
 
-function issueRow(issue: IssueSummary): HTMLElement {
-  const li = el("li");
-  li.tabIndex = 0;
-  const run = runsOf(issue.key).find(isActiveRun);
-  const head = el("div", undefined, "issue-head");
-  head.append(
-    el("strong", issue.key, "key"),
-    pill(issue.status, issue.statusCategory),
-    el("span", issue.type, "muted"),
-  );
-  if (run) head.append(el("span", "Agent on it", "agent-tag lamp"));
-  li.append(head, el("div", issue.summary, "issue-title"));
-  if (issue.assignee) li.append(el("div", issue.assignee, "muted"));
+/** Epics folded in the list, by "<project>:<key>". */
+const foldedEpics = new Set<string>();
+
+/**
+ * A ticket in a glance: its title, what its agent is up to, and only the facts that say
+ * something (a status other than open, a type other than the default, its tickets done).
+ */
+function issueRow(issue: IssueSummary, children: IssueSummary[] = []): HTMLElement {
+  const li = el("li", undefined, "issue-row");
+  const row = el("div", undefined, "row-main");
+  row.tabIndex = 0;
+  const title = el("div", undefined, "issue-title");
+  title.append(el("span", issue.key, "key"), el("span", issue.summary));
+  const meta = el("div", undefined, "issue-meta");
+  if (issue.statusCategory !== "new") meta.append(pill(issue.status, issue.statusCategory));
+  if (issue.type && issue.type !== "Issue") meta.append(el("span", issue.type, "muted"));
+  if (issue.childCount)
+    meta.append(
+      el("span", `${issue.childCount.done}/${issue.childCount.total} tickets done`, "muted"),
+    );
+  if (issue.assignee) meta.append(el("span", issue.assignee, "muted"));
+  const last = runsOf(issue.key)[0];
+  const text = el("div", undefined, "row-text");
+  text.append(title);
+  if (meta.childElementCount) text.append(meta);
+  row.append(text);
+  if (last) row.append(stateChip(last));
   const open = () => {
     view = { kind: "issue", key: issue.key };
     render();
   };
-  li.addEventListener("click", open);
-  li.addEventListener("keydown", (e) => e.key === "Enter" && open());
+  row.addEventListener("click", open);
+  row.addEventListener("keydown", (e) => e.key === "Enter" && open());
+  li.append(row);
+  if (children.length) {
+    const id = `${activeProject()?.id}:${issue.key}`;
+    const folded = foldedEpics.has(id);
+    const fold = button(
+      folded ? `▸ ${children.length} tickets` : `▾ ${children.length} tickets`,
+      () => {
+        if (foldedEpics.has(id)) foldedEpics.delete(id);
+        else foldedEpics.add(id);
+        refreshList?.();
+      },
+    );
+    fold.className = "fold";
+    li.append(fold);
+    if (!folded) {
+      const sub = el("ul", undefined, "issues children");
+      sub.append(...children.map((c) => issueRow(c)));
+      li.append(sub);
+    }
+  }
   return li;
+}
+
+/** What the ticket's latest run is up to, as a coloured word. */
+function stateChip(run: RunView): HTMLElement {
+  const state = ticketState(run);
+  return el("span", state.label, `chip ${state.tone}`);
 }
 
 /** Runs on this ticket of the active project ("#12" exists in every GitHub repository). */
@@ -244,21 +349,73 @@ async function renderIssue(key: string): Promise<void> {
   };
   const can = issue.permissions;
 
-  const summary = input(issue.summary);
-  summary.readOnly = !can.edit;
-  const description = textarea(issue.description, 10);
-  description.readOnly = !can.edit;
-
   const head = el("div", undefined, "issue-head");
-  head.append(
-    link(issue.key, issue.url),
-    pill(issue.status, issue.statusCategory),
-    el("span", issue.type, "muted"),
-  );
+  head.append(link(issue.key, issue.url), pill(issue.status, issue.statusCategory));
+  if (issue.type && issue.type !== "Issue") head.append(el("span", issue.type, "muted"));
   if (issue.priority) head.append(el("span", issue.priority, "muted"));
+  if (issue.parent) {
+    const parent = issue.parent;
+    head.append(
+      button(
+        `in ${parent.key}`,
+        () => {
+          view = { kind: "issue", key: parent.key };
+          render();
+        },
+        "link",
+      ),
+    );
+  }
 
-  const statusRow = el("div", undefined, "inline");
-  if (can.transition && issue.transitions.length) {
+  // What people come for first: the agent. The ticket itself is read, and edited on demand.
+  const agentBox = el("div", undefined, "card agent-box");
+  refreshAgentBox = () => renderAgentBox(agentBox, issue);
+  refreshAgentBox();
+
+  const ticket = el("section", undefined, "ticket-text");
+  const showText = () => {
+    const actions = el("div", undefined, "actions");
+    if (can.edit) actions.append(button("Edit", showForm));
+    const transitions = transitionPicker();
+    if (transitions) actions.append(transitions);
+    ticket.replaceChildren(
+      issue.description.trim()
+        ? foldedMarkdown(issue.description, 10)
+        : el("p", "No description.", "muted"),
+      actions,
+    );
+  };
+  const showForm = () => {
+    const summary = input(issue.summary);
+    const description = textarea(issue.description, 12);
+    const save = button(
+      "Save",
+      () =>
+        void busy(save, status, async () => {
+          await api().updateIssue(project.id, key, {
+            summary: summary.value !== issue.summary ? summary.value : undefined,
+            description: description.value !== issue.description ? description.value : undefined,
+          });
+          reload();
+        }),
+      "primary",
+    );
+    const actions = el("div", undefined, "actions");
+    actions.append(save, button("Cancel", showText));
+    if (project.tracker.kind === "jira")
+      actions.append(
+        el(
+          "small",
+          "Saving the description keeps paragraphs only: rich formatting is lost.",
+          "muted",
+        ),
+      );
+    ticket.replaceChildren(field("Summary", summary), field("Description", description), actions);
+    description.focus();
+  };
+  /** Moves the ticket along its workflow as soon as a status is picked. */
+  const transitionPicker = (): HTMLElement | undefined => {
+    if (!can.transition || !issue.transitions.length) return undefined;
     const transitions = select([
       ["", "Move to…"],
       ...issue.transitions.map((t): [string, string] => [
@@ -266,51 +423,17 @@ async function renderIssue(key: string): Promise<void> {
         t.name === t.to ? t.to : `${t.name} → ${t.to}`,
       ]),
     ]);
-    const apply = button("Apply", () => {
+    transitions.className = "compact";
+    transitions.addEventListener("change", () => {
       if (!transitions.value) return;
-      void busy(apply, status, () => api().transition(project.id, key, transitions.value)).then(
+      transitions.disabled = true;
+      void busy(undefined, status, () => api().transition(project.id, key, transitions.value)).then(
         reload,
       );
     });
-    statusRow.append(transitions, apply);
-  } else
-    statusRow.append(
-      el(
-        "span",
-        can.transition ? "No transition available" : "You can't change the status",
-        "muted",
-      ),
-    );
-
-  const editRow = el("div", undefined, "actions");
-  if (can.edit) {
-    const save = button(
-      "Save",
-      () =>
-        void busy(save, status, async () => {
-          const changes = {
-            summary: summary.value !== issue.summary ? summary.value : undefined,
-            description: description.value !== issue.description ? description.value : undefined,
-          };
-          await api().updateIssue(project.id, key, changes);
-          reload();
-        }),
-      "primary",
-    );
-    editRow.append(save);
-    if (project.tracker.kind === "jira")
-      editRow.append(
-        el(
-          "small",
-          "Saving the description keeps paragraphs only: rich formatting is lost.",
-          "muted",
-        ),
-      );
-  }
-
-  const agentBox = el("div", undefined, "card agent-box");
-  refreshAgentBox = () => renderAgentBox(agentBox, issue);
-  refreshAgentBox();
+    return transitions;
+  };
+  showText();
 
   const comments = el("ol", undefined, "comments");
   for (const c of [...issue.comments].reverse()) {
@@ -321,17 +444,20 @@ async function renderIssue(key: string): Promise<void> {
         `${c.author} · ${new Date(c.created).toLocaleString()}${c.trusted ? "" : " · not a collaborator: hidden from agents"}`,
         "muted",
       ),
-      el("div", c.text, "pre"),
+      foldedMarkdown(c.text),
     );
     comments.append(li);
   }
-  const commentBox = el("div");
+  const commentBox = el("div", undefined, "comment-box");
   if (can.comment) {
-    const text = textarea("", 3);
-    text.placeholder = "Add a comment";
+    const text = textarea("", 2);
+    text.placeholder = "Add a comment. Start with @agent to send it to the agent.";
     const send = button("Comment", () => {
       if (!text.value.trim()) return;
       void busy(send, status, () => api().comment(project.id, key, text.value)).then(reload);
+    });
+    text.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send.click();
     });
     commentBox.append(text, send);
   }
@@ -339,13 +465,11 @@ async function renderIssue(key: string): Promise<void> {
   body().replaceChildren(
     backButton(),
     head,
+    el("h3", issue.summary, "issue-heading"),
     status,
-    field("Summary", summary),
-    field("Status", statusRow),
-    field("Description", description),
-    editRow,
-    ...(issue.attachments.length ? [attachmentsBox(project.id, issue.attachments)] : []),
     agentBox,
+    ticket,
+    ...(issue.attachments.length ? [attachmentsBox(project.id, issue.attachments)] : []),
     el("h4", `Comments (${issue.comments.length})`),
     commentBox,
     comments,
@@ -401,6 +525,11 @@ function attachmentsBox(projectId: string, attachments: Attachment[]): HTMLEleme
   return box;
 }
 
+/**
+ * One obvious next step for the ticket, chosen from where it is: run an epic's tickets,
+ * continue the agent's work, or put a first agent on it. Everything else is folded under
+ * "More options".
+ */
 function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
   const runs = runsOf(issue.key);
   const active = runs.find(isActiveRun);
@@ -421,12 +550,15 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
   }
   if (last) box.append(runSummary(last));
   const project = activeProject()!;
-  if (last?.agentStarted && last.branch) box.append(continueBox(last));
   const trustKey = `${project.id}:${issue.key}`;
   const model = modelSelect(chosenModel.get(trustKey) ?? project.agent.model);
   model.addEventListener("change", () => chosenModel.set(trustKey, model.value));
+
+  const open = (issue.children ?? []).filter((c) => c.statusCategory !== "done");
+  const epic = open.length > 0 && issue.trusted;
+  const continuing = !epic && Boolean(last?.agentStarted && last.branch);
   const start = button(
-    last ? "▶ Put an agent on it again" : "▶ Put an agent on it",
+    epic || continuing ? "Start over with a new agent" : `▶ Put an agent on it`,
     () =>
       void busy(start, status, async () => {
         await api().startRun(project.id, issue.key, {
@@ -435,15 +567,9 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
           model: model.value,
         });
       }),
-    "primary",
+    epic || continuing ? undefined : "primary",
   );
-  box.append(
-    el(
-      "p",
-      `Works in a worktree of ${project.repo.fullName}, ${project.agent.openPullRequest ? "then opens a pull request" : "then commits locally"}.`,
-      "muted",
-    ),
-  );
+
   if (!issue.trusted) {
     // The issue text becomes the agent's instructions: a stranger could make it run anything.
     const warning = el("div", undefined, "trust-warning");
@@ -466,28 +592,47 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
     warning.append(label);
     box.append(warning);
   }
-  if (issue.publicRepo)
+
+  if (epic) box.append(epicBox(project.id, issue.key, open.length));
+  else if (continuing) box.append(continueBox(last!));
+  else
     box.append(
+      start,
+      el(
+        "p",
+        `Works on its own branch of ${project.repo.fullName}, ${project.agent.openPullRequest ? "then opens a pull request" : "then commits locally"}.`,
+        "muted",
+      ),
+    );
+  box.append(status);
+
+  const options = el("details", undefined, "options");
+  options.open = openOptions.has(trustKey);
+  options.addEventListener("toggle", () => {
+    if (options.open) openOptions.add(trustKey);
+    else openOptions.delete(trustKey);
+  });
+  options.append(el("summary", "More options"));
+  if (!epic && issue.trusted) options.append(planBox(project.id, issue.key));
+  options.append(
+    branchPicker(project.id, issue, trustKey),
+    field("Model", model, "Opus only for hard tickets: it uses the Claude quota much faster."),
+  );
+  if (epic || continuing) options.append(start);
+  if (issue.publicRepo)
+    options.append(
       el(
         "p",
         "Public repository: comments from people who aren't collaborators are never shown to the agent.",
         "muted",
       ),
     );
-  const open = (issue.children ?? []).filter((c) => c.statusCategory !== "done");
-  if (open.length && issue.trusted) box.append(epicBox(project.id, issue.key, open.length));
-  else if (issue.trusted) box.append(planBox(project.id, issue.key));
-  box.append(
-    branchPicker(project.id, issue, trustKey),
-    field("Model", model, "Opus only for hard tickets: it uses the Claude quota much faster."),
-    start,
-    status,
-  );
+  box.append(options);
 }
 
 /** A cheap agent that only writes the tickets this one breaks into, under it. */
 function planBox(projectId: string, key: string): HTMLElement {
-  const box = el("div", undefined, "epic-box");
+  const box = el("div", undefined, "option-row");
   const status = el("p", "", "status");
   const go = button(
     "Break it into tickets",
@@ -497,12 +642,12 @@ function planBox(projectId: string, key: string): HTMLElement {
       }),
   );
   box.append(
+    go,
     el(
-      "p",
-      `Too big for one agent? A ${PLAN_MODEL} agent reads the code without changing it and writes the tickets it breaks into, under ${key}. Then put agents on them one after another.`,
+      "small",
+      `Too big for one agent? A ${PLAN_MODEL} agent reads the code without changing it and writes the tickets it breaks into, under ${key}.`,
       "muted",
     ),
-    go,
     status,
   );
   return box;
@@ -513,7 +658,7 @@ function epicBox(projectId: string, epicKey: string, count: number): HTMLElement
   const box = el("div", undefined, "epic-box");
   const status = el("p", "", "status");
   const go = button(
-    `Put agents on its ${count} open ticket${count === 1 ? "" : "s"}`,
+    `▶ Put agents on its ${count} open ticket${count === 1 ? "" : "s"}`,
     () =>
       void busy(go, status, async () => {
         await api().startEpic(projectId, epicKey);
@@ -523,12 +668,12 @@ function epicBox(projectId: string, epicKey: string, count: number): HTMLElement
     "primary",
   );
   box.append(
+    go,
     el(
       "p",
-      "One after another, in their order in the epic. Each starts from the branch of the one before, so the work it depends on is already there, and reads what the earlier agents did. A ticket that fails stops the rest.",
+      "One after another, each on the branch of the one before, so the work it depends on is there. A ticket that fails stops the rest.",
       "muted",
     ),
-    go,
     status,
   );
   return box;
@@ -562,7 +707,7 @@ function continueBox(last: RunView): HTMLElement {
   const reviewLabel = el("label", undefined, "check");
   reviewLabel.append(review, " Pass on the pull request's review comments");
   const go = button(
-    "Continue",
+    "▶ Continue",
     () =>
       void busy(go, status, async () => {
         await api().continueRun(last.id, text.value, {
@@ -639,11 +784,11 @@ function branchPicker(projectId: string, issue: IssueDetail, key: string): HTMLE
   return box;
 }
 
-function runSummary(run: RunView): HTMLElement {
+function runSummary(run: RunView, options: { retry?: boolean } = {}): HTMLElement {
   const div = el("div", undefined, "run-summary");
   const head = el("div", undefined, "issue-head");
   head.append(
-    el("span", run.status[0]!.toUpperCase() + run.status.slice(1), `run-status ${run.status}`),
+    el("span", statusLabel(run), `run-status ${isLimitStop(run) ? "paused" : run.status}`),
     el("span", formatDuration((run.endedAt ?? Date.now()) - run.startedAt), "muted"),
   );
   if (run.model) head.append(el("span", run.model, "muted"));
@@ -699,11 +844,66 @@ function runSummary(run: RunView): HTMLElement {
   }
   if (run.continuedFrom)
     div.append(el("div", `↳ continued: ${run.instruction ?? "the review comments"}`, "muted pre"));
-  if (run.pullRequestUrl) div.append(link("Pull request", run.pullRequestUrl));
-  if (run.error) div.append(el("div", run.error, "bad pre"));
+  if (run.pullRequestUrl) div.append(link("Open the pull request", run.pullRequestUrl));
+  if (run.error) div.append(el("div", run.error, isLimitStop(run) ? "wait pre" : "bad pre"));
+  if (
+    options.retry !== false &&
+    run.status === "failed" &&
+    !run.stoppedOnBudget &&
+    !run.resumeAt &&
+    latestRun(run) === run
+  )
+    div.append(retryButton(run));
+  // A failed agent's last words are often the error itself.
+  const result = run.result?.trim();
+  if (result && !isActiveRun(run) && !run.error?.includes(result))
+    div.append(foldedMarkdown(result, 4));
   const lastLine = run.log.at(-1);
-  if (lastLine && isActiveRun(run)) div.append(el("div", lastLine, "muted"));
+  if (lastLine && isActiveRun(run))
+    // Without the time the runner puts in front ("10:42:05  ").
+    div.append(el("div", lastLine.split("  ").slice(1).join("  ") || lastLine, "muted now"));
   return div;
+}
+
+/** The run's status in words; the usage limit is a pause, not a failure. */
+function statusLabel(run: RunView): string {
+  if (run.status === "failed" && isLimitStop(run)) return "Paused";
+  return (
+    {
+      queued: "Waiting",
+      preparing: "Getting ready",
+      running: "Working",
+      publishing: "Publishing",
+      done: "Done",
+      failed: "Failed",
+      cancelled: "Stopped",
+    } satisfies Record<RunView["status"], string>
+  )[run.status];
+}
+
+const RETRY_INSTRUCTION =
+  "You were stopped before you finished. Pick the ticket up where you left off: your changes so far are still in the worktree.";
+
+/** Picks a stopped ticket up again: the same session when the agent had started. */
+async function retry(run: RunView): Promise<void> {
+  if (run.agentStarted && run.branch) await api().continueRun(run.id, RETRY_INSTRUCTION);
+  else
+    await api().startRun(run.projectId, run.issueKey, {
+      model: run.model,
+      planOnly: run.planOnly,
+    });
+}
+
+function retryButton(run: RunView): HTMLElement {
+  const box = el("div", undefined, "inline");
+  const status = el("p", "", "status");
+  const go = button(
+    run.agentStarted && run.branch ? "Pick it up again" : "Try again",
+    () => void busy(go, status, () => retry(run)),
+    "primary",
+  );
+  box.append(go, status);
+  return box;
 }
 
 const CI_LABELS = { pending: "Checks running", success: "Checks passed", failure: "Checks failed" };
@@ -719,17 +919,23 @@ function latestRun(run: RunView): RunView | undefined {
 const clock = (at: number): string =>
   new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-/** What today's runs cost, and how many agents may work at once. */
+/** What today brought and cost, and how many agents may work at once. */
 function usageLine(): HTMLElement {
   const midnight = new Date().setHours(0, 0, 0, 0);
   const today = work.runs.filter((r) => r.startedAt >= midnight);
   const cost = today.reduce((sum, r) => sum + (r.costUsd ?? 0), 0);
+  const pulls = new Set(
+    today.filter((r) => r.status === "done" && r.pullRequestUrl).map((r) => r.pullRequestUrl),
+  ).size;
   const queued = work.runs.filter((r) => r.status === "queued").length;
   const line = el("div", undefined, "usage");
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   line.append(
     el(
       "span",
-      `Today: $${cost.toFixed(2)} over ${today.length} run${today.length === 1 ? "" : "s"}`,
+      today.length
+        ? `Today: ${pulls ? `${plural(pulls, "pull request")}, ` : ""}$${cost.toFixed(2)} over ${plural(today.length, "run")}`
+        : "Nothing run today yet",
     ),
     el(
       "span",
@@ -831,49 +1037,142 @@ function renderCreate(): void {
   );
 }
 
+/**
+ * What needs the person first, then the agents at work, then each ticket's last run.
+ * Older runs of a ticket only show on demand.
+ */
 function renderAgents(): void {
   const container = body();
   const scroll = container.scrollTop;
+  const agentsTab = board.querySelector<HTMLElement>(".tabs button:last-child");
+  const needs = needsYou(work.runs, dismissed());
+  if (agentsTab) agentsTab.textContent = `Agents${needs.length ? ` (${needs.length})` : ""}`;
   if (!work.runs.length) {
     container.replaceChildren(
       el("p", "No agent has been put on a ticket yet. Open a ticket and press ▶.", "muted empty"),
     );
     return;
   }
-  container.replaceChildren(
-    usageLine(),
-    ...work.runs.map((run) => {
-      const card = el("div", undefined, "card");
-      const title = el("div", undefined, "issue-head");
-      const key = button(run.issueKey, () => void showIssue(run.projectId, run.issueKey), "link");
-      title.append(key, el("span", run.issueSummary));
-      card.append(title, runSummary(run));
-      const questions = questionsBox(run);
-      if (questions) card.append(questions);
-      if (run.branch)
-        card.append(Object.assign(el("div", run.branch, "muted branch"), { title: run.branch }));
-      const actions = el("div", undefined, "actions");
-      const status = el("p", "", "status");
-      if (isActiveRun(run)) {
-        const cancel = button(
-          "Stop",
-          () => void busy(cancel, status, () => api().cancelRun(run.id)),
-          "danger",
-        );
-        actions.append(cancel);
-      }
-      const open = expandedLogs.has(run.id);
-      actions.append(
-        button(open ? "Hide log" : "Log", () => {
-          if (open) expandedLogs.delete(run.id);
-          else expandedLogs.add(run.id);
-          renderAgents();
-        }),
-      );
-      card.append(actions, status);
-      if (open) card.append(el("pre", run.log.join("\n"), "log"));
-      return card;
+  const needing = new Set(needs.map((n) => n.run.id));
+  const working = work.runs.filter((r) => isActiveRun(r) && !needing.has(r.id));
+  const shown = new Set([...needing, ...working.map((r) => r.id)]);
+  const rest = (showHistory ? work.runs : latestRuns(work.runs)).filter((r) => !shown.has(r.id));
+
+  const sections: HTMLElement[] = [usageLine()];
+  // The usage limit stops every agent at once: they go back together.
+  const limited = needs.filter((n) => n.kind === "failed" && isLimitStop(n.run));
+  const all =
+    limited.length > 1
+      ? button(
+          `Pick the ${limited.length} up again`,
+          () => {
+            for (const n of limited) void retry(n.run).catch(() => undefined);
+          },
+          "link",
+        )
+      : undefined;
+  if (needs.length) sections.push(section("Needs you", needs.map(needCard), all));
+  else sections.push(el("p", "Nothing needs you right now.", "muted calm"));
+  if (working.length) sections.push(section("Working now", working.map(runCard)));
+  if (rest.length) {
+    const history = button(
+      showHistory ? "Last run of each ticket only" : "Show every run",
+      () => {
+        showHistory = !showHistory;
+        renderAgents();
+      },
+      "link",
+    );
+    sections.push(section("Recent", rest.map(runCard), history));
+  }
+  container.replaceChildren(...sections);
+  container.scrollTop = scroll;
+}
+
+function section(title: string, cards: HTMLElement[], extra?: HTMLElement): HTMLElement {
+  const box = el("section", undefined, "run-section");
+  const head = el("div", undefined, "section-head");
+  head.append(el("h4", title));
+  if (extra) head.append(extra);
+  box.append(head, ...cards);
+  return box;
+}
+
+/** The ticket a card is about, which opens it. */
+function cardTitle(run: RunView): HTMLElement {
+  const title = el("div", undefined, "issue-head");
+  title.append(
+    button(run.issueKey, () => void showIssue(run.projectId, run.issueKey), "link"),
+    el("span", run.issueSummary),
+  );
+  return title;
+}
+
+/** Something waiting for the person, with what to do about it right there. */
+function needCard(need: Need): HTMLElement {
+  const { run } = need;
+  const card = el("div", undefined, `card need ${need.kind}${isLimitStop(run) ? " limit" : ""}`);
+  card.append(cardTitle(run), el("strong", need.label, "need-label"));
+  const questions = questionsBox(run);
+  if (questions) {
+    card.append(questions);
+    return card;
+  }
+  card.append(runSummary(run, { retry: false }));
+  const actions = el("div", undefined, "actions");
+  const status = el("p", "", "status");
+  if (need.kind === "failed") actions.append(retryButton(run));
+  if (need.kind === "review" && run.pullRequestUrl)
+    actions.append(
+      Object.assign(link("Review the pull request", run.pullRequestUrl), {
+        className: "button primary",
+      }),
+    );
+  if (need.kind === "checks") {
+    const fix = button(
+      "Ask the agent to fix them",
+      () =>
+        void busy(fix, status, () =>
+          api().continueRun(
+            run.id,
+            "The checks of your pull request still fail. Find out why (run the same checks locally), fix the cause, and check it again before finishing.",
+          ),
+        ),
+      "primary",
+    );
+    actions.append(fix);
+  }
+  actions.append(button(need.kind === "review" ? "Reviewed" : "Dismiss", () => dismiss(run.id)));
+  card.append(actions, status);
+  return card;
+}
+
+function runCard(run: RunView): HTMLElement {
+  const card = el("div", undefined, "card");
+  card.append(cardTitle(run), runSummary(run));
+  const questions = questionsBox(run);
+  if (questions) card.append(questions);
+  if (run.branch)
+    card.append(Object.assign(el("div", run.branch, "muted branch"), { title: run.branch }));
+  const actions = el("div", undefined, "actions");
+  const status = el("p", "", "status");
+  if (isActiveRun(run)) {
+    const cancel = button(
+      "Stop",
+      () => void busy(cancel, status, () => api().cancelRun(run.id)),
+      "danger",
+    );
+    actions.append(cancel);
+  }
+  const open = expandedLogs.has(run.id);
+  actions.append(
+    button(open ? "Hide log" : "Log", () => {
+      if (open) expandedLogs.delete(run.id);
+      else expandedLogs.add(run.id);
+      renderAgents();
     }),
   );
-  container.scrollTop = scroll;
+  card.append(actions, status);
+  if (open) card.append(el("pre", run.log.join("\n"), "log"));
+  return card;
 }
