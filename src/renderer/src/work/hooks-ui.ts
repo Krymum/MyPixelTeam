@@ -1,5 +1,6 @@
 import type { HooksStatus } from "../../../shared/work/types";
 import { busy, button, el } from "../dom";
+import { t } from "../i18n";
 
 /**
  * Claude Code hooks, one click instead of `npm run setup:claude`. Optional: transcripts
@@ -13,10 +14,12 @@ export function hooksCard(): HTMLElement {
   const body = el("div", undefined, "account-form");
   const status = el("p", "", "status");
   card.append(
-    el("h4", "Live signals from Claude Code (optional)"),
+    el("h4", t("Live signals from Claude Code (optional)")),
     el(
       "p",
-      'Hooks tell the office when an agent waits for you or ends its session, and enable the "waiting for you" notification. They run in the background and never slow Claude Code down.',
+      t(
+        'Hooks tell the office when an agent waits for you or ends its session, and enable the "waiting for you" notification. They run in the background and never slow Claude Code down.',
+      ),
       "muted",
     ),
     body,
@@ -26,7 +29,7 @@ export function hooksCard(): HTMLElement {
   const show = (state: HooksStatus) => {
     const where = el(
       "small",
-      `In ${state.settingsPath}; your own hooks are kept and a backup is made.`,
+      t("In {path}; your own hooks are kept and a backup is made.", { path: state.settingsPath }),
       "muted",
     );
     const action = (label: string, run: () => Promise<HooksStatus>, className?: string) => {
@@ -35,21 +38,21 @@ export function hooksCard(): HTMLElement {
     };
     const actions = el("div", undefined, "actions");
     if (!state.installed)
-      actions.append(action("Install hooks", () => api().installHooks(), "primary"));
+      actions.append(action(t("Install hooks"), () => api().installHooks(), "primary"));
     else {
       if (state.outdated)
-        actions.append(action("Update hooks", () => api().installHooks(), "primary"));
-      actions.append(action("Remove hooks", () => api().uninstallHooks()));
+        actions.append(action(t("Update hooks"), () => api().installHooks(), "primary"));
+      actions.append(action(t("Remove hooks"), () => api().uninstallHooks()));
     }
     const line = state.installed
       ? el(
           "p",
           state.outdated
-            ? "Installed, but pointing at another copy of the app."
-            : "✓ Installed. New Claude Code sessions use them; restart running ones.",
+            ? t("Installed, but pointing at another copy of the app.")
+            : t("✓ Installed. New Claude Code sessions use them; restart running ones."),
           state.outdated ? "bad" : "ok",
         )
-      : el("p", "Not installed.", "muted");
+      : el("p", t("Not installed."), "muted");
     body.replaceChildren(line);
     if (!state.node.ok) {
       body.append(el("p", state.node.detail, "bad"));
@@ -58,7 +61,7 @@ export function hooksCard(): HTMLElement {
     body.append(actions, where);
   };
 
-  body.append(el("p", "Checking…", "muted"));
+  body.append(el("p", t("Checking…"), "muted"));
   void busy(undefined, status, async () => show(await api().hooksStatus()));
   return card;
 }

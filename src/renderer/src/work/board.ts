@@ -18,6 +18,7 @@ import {
   type Need,
 } from "../../../shared/work/run-state";
 import { busy, button, el, field, formatDuration, input, link, select, textarea } from "../dom";
+import { locale, t, tn } from "../i18n";
 import { foldedMarkdown } from "../markdown";
 import { dismiss, dismissed } from "./dismissed";
 import { modelSelect } from "./model-ui";
@@ -136,24 +137,27 @@ function render(): void {
   refreshAgentBox = undefined;
   refreshList = undefined;
   const close = button("✕", () => toggleBoard(false), "close");
-  close.title = "Close";
+  close.title = t("Close");
   const tabs = el("nav", undefined, "tabs");
   const needs = needsYou(work.runs, dismissed()).length;
   for (const [id, label] of [
-    ["tickets", "Tickets"],
-    ["agents", `Agents${needs ? ` (${needs})` : ""}`],
+    ["tickets", t("Tickets")],
+    ["agents", agentsLabel(needs)],
   ] as const) {
-    const t = button(label, () => {
+    const choice = button(label, () => {
       tab = id;
       render();
     });
-    if (tab === id) t.className = "selected";
-    tabs.append(t);
+    if (tab === id) choice.className = "selected";
+    tabs.append(choice);
   }
   board.replaceChildren(close, tabs, el("div", undefined, "board-body"));
   if (tab === "agents") renderAgents();
   else renderTickets();
 }
+
+const agentsLabel = (needs: number): string =>
+  needs ? t("Agents ({n})", { n: needs }) : t("Agents");
 
 function body(): HTMLElement {
   return board.querySelector<HTMLElement>(".board-body")!;
@@ -165,9 +169,12 @@ function renderTickets(): void {
     const ready = connected("github") || connected("bitbucket");
     const setup = el("div", undefined, "empty");
     setup.append(
-      el("p", ready ? "No project yet." : "Connect GitHub or Bitbucket to see your projects."),
+      el(
+        "p",
+        ready ? t("No project yet.") : t("Connect GitHub or Bitbucket to see your projects."),
+      ),
       button(
-        ready ? "Create a project" : "Open settings",
+        ready ? t("Create a project") : t("Open settings"),
         () => openSettings(ready ? null : undefined),
         "primary",
       ),
@@ -185,26 +192,26 @@ function renderList(): void {
   const status = el("p", "", "status");
   const search = input(
     query.text,
-    project.tracker.kind === "jira" ? "Search, or a key like PROJ-12" : "Search, or #12",
+    project.tracker.kind === "jira" ? t("Search, or a key like PROJ-12") : t("Search, or #12"),
     "search",
   );
   const done = input("", "", "checkbox");
   done.checked = query.includeDone;
   const doneLabel = el("label", undefined, "check");
-  doneLabel.append(done, " Show done");
+  doneLabel.append(done, ` ${t("Show done")}`);
   const list = el("ul", undefined, "issues");
 
   const load = () =>
     void busy(undefined, status, async () => {
       query = { text: search.value, includeDone: done.checked };
-      list.replaceChildren(el("li", "Loading…", "muted"));
+      list.replaceChildren(el("li", t("Loading…"), "muted"));
       issues = await api().issues(project.id, query);
       showIssues();
     }).then(() => {
       if (!issues) list.replaceChildren();
     });
   const showIssues = () => {
-    if (!issues!.length) return void list.replaceChildren(el("li", "No tickets.", "muted"));
+    if (!issues!.length) return void list.replaceChildren(el("li", t("No tickets."), "muted"));
     // Tickets sit under their epic when both are listed.
     const listed = new Set(issues!.map((i) => i.key));
     const children = new Map<string, IssueSummary[]>();
@@ -226,9 +233,9 @@ function renderList(): void {
   toolbar.append(
     search,
     doneLabel,
-    Object.assign(button("↻", load), { title: "Reload the tickets" }),
+    Object.assign(button("↻", load), { title: t("Reload the tickets") }),
     button(
-      "New ticket",
+      t("New ticket"),
       () => {
         view = { kind: "create" };
         render();
@@ -274,7 +281,14 @@ function issueRow(issue: IssueSummary, children: IssueSummary[] = []): HTMLEleme
   if (issue.type && issue.type !== "Issue") meta.append(el("span", issue.type, "muted"));
   if (issue.childCount)
     meta.append(
-      el("span", `${issue.childCount.done}/${issue.childCount.total} tickets done`, "muted"),
+      el(
+        "span",
+        t("{done}/{total} tickets done", {
+          done: issue.childCount.done,
+          total: issue.childCount.total,
+        }),
+        "muted",
+      ),
     );
   if (issue.assignee) meta.append(el("span", issue.assignee, "muted"));
   const last = runsOf(issue.key)[0];
@@ -294,7 +308,7 @@ function issueRow(issue: IssueSummary, children: IssueSummary[] = []): HTMLEleme
     const id = `${activeProject()?.id}:${issue.key}`;
     const folded = foldedEpics.has(id);
     const fold = button(
-      folded ? `▸ ${children.length} tickets` : `▾ ${children.length} tickets`,
+      `${folded ? "▸" : "▾"} ${tn(children.length, "{n} ticket", "{n} tickets")}`,
       () => {
         if (foldedEpics.has(id)) foldedEpics.delete(id);
         else foldedEpics.add(id);
@@ -315,7 +329,7 @@ function issueRow(issue: IssueSummary, children: IssueSummary[] = []): HTMLEleme
 /** What the ticket's latest run is up to, as a coloured word. */
 function stateChip(run: RunView): HTMLElement {
   const state = ticketState(run);
-  return el("span", state.label, `chip ${state.tone}`);
+  return el("span", t(state.label, state.vars), `chip ${state.tone}`);
 }
 
 /** Runs on this ticket of the active project ("#12" exists in every GitHub repository). */
@@ -329,7 +343,7 @@ function pill(text: string, category: string): HTMLElement {
 }
 
 function backButton(): HTMLButtonElement {
-  return button("← Tickets", () => {
+  return button(`← ${t("Tickets")}`, () => {
     view = { kind: "list" };
     render();
   });
@@ -337,7 +351,7 @@ function backButton(): HTMLButtonElement {
 
 async function renderIssue(key: string): Promise<void> {
   const status = el("p", "", "status");
-  body().replaceChildren(backButton(), el("p", `Loading ${key}…`, "muted"), status);
+  body().replaceChildren(backButton(), el("p", t("Loading {key}…", { key }), "muted"), status);
   const project = activeProject()!;
   // Opening a ticket asks origin again: runs push branches, colleagues create them.
   branchLookups.delete(`${project.id}:${key}`);
@@ -357,7 +371,7 @@ async function renderIssue(key: string): Promise<void> {
     const parent = issue.parent;
     head.append(
       button(
-        `in ${parent.key}`,
+        t("in {key}", { key: parent.key }),
         () => {
           view = { kind: "issue", key: parent.key };
           render();
@@ -375,13 +389,13 @@ async function renderIssue(key: string): Promise<void> {
   const ticket = el("section", undefined, "ticket-text");
   const showText = () => {
     const actions = el("div", undefined, "actions");
-    if (can.edit) actions.append(button("Edit", showForm));
+    if (can.edit) actions.append(button(t("Edit"), showForm));
     const transitions = transitionPicker();
     if (transitions) actions.append(transitions);
     ticket.replaceChildren(
       issue.description.trim()
         ? foldedMarkdown(issue.description, 10)
-        : el("p", "No description.", "muted"),
+        : el("p", t("No description."), "muted"),
       actions,
     );
   };
@@ -389,7 +403,7 @@ async function renderIssue(key: string): Promise<void> {
     const summary = input(issue.summary);
     const description = textarea(issue.description, 12);
     const save = button(
-      "Save",
+      t("Save"),
       () =>
         void busy(save, status, async () => {
           await api().updateIssue(project.id, key, {
@@ -401,26 +415,30 @@ async function renderIssue(key: string): Promise<void> {
       "primary",
     );
     const actions = el("div", undefined, "actions");
-    actions.append(save, button("Cancel", showText));
+    actions.append(save, button(t("Cancel"), showText));
     if (project.tracker.kind === "jira")
       actions.append(
         el(
           "small",
-          "Saving the description keeps paragraphs only: rich formatting is lost.",
+          t("Saving the description keeps paragraphs only: rich formatting is lost."),
           "muted",
         ),
       );
-    ticket.replaceChildren(field("Summary", summary), field("Description", description), actions);
+    ticket.replaceChildren(
+      field(t("Summary"), summary),
+      field(t("Description"), description),
+      actions,
+    );
     description.focus();
   };
   /** Moves the ticket along its workflow as soon as a status is picked. */
   const transitionPicker = (): HTMLElement | undefined => {
     if (!can.transition || !issue.transitions.length) return undefined;
     const transitions = select([
-      ["", "Move to…"],
-      ...issue.transitions.map((t): [string, string] => [
-        t.id,
-        t.name === t.to ? t.to : `${t.name} → ${t.to}`,
+      ["", t("Move to…")],
+      ...issue.transitions.map((tr): [string, string] => [
+        tr.id,
+        tr.name === tr.to ? tr.to : `${tr.name} → ${tr.to}`,
       ]),
     ]);
     transitions.className = "compact";
@@ -441,7 +459,7 @@ async function renderIssue(key: string): Promise<void> {
     li.append(
       el(
         "div",
-        `${c.author} · ${new Date(c.created).toLocaleString()}${c.trusted ? "" : " · not a collaborator: hidden from agents"}`,
+        `${c.author} · ${new Date(c.created).toLocaleString(locale())}${c.trusted ? "" : ` · ${t("not a collaborator: hidden from agents")}`}`,
         "muted",
       ),
       foldedMarkdown(c.text),
@@ -451,8 +469,8 @@ async function renderIssue(key: string): Promise<void> {
   const commentBox = el("div", undefined, "comment-box");
   if (can.comment) {
     const text = textarea("", 2);
-    text.placeholder = "Add a comment. Start with @agent to send it to the agent.";
-    const send = button("Comment", () => {
+    text.placeholder = t("Add a comment. Start with @agent to send it to the agent.");
+    const send = button(t("Comment"), () => {
       if (!text.value.trim()) return;
       void busy(send, status, () => api().comment(project.id, key, text.value)).then(reload);
     });
@@ -470,7 +488,7 @@ async function renderIssue(key: string): Promise<void> {
     agentBox,
     ticket,
     ...(issue.attachments.length ? [attachmentsBox(project.id, issue.attachments)] : []),
-    el("h4", `Comments (${issue.comments.length})`),
+    el("h4", t("Comments ({n})", { n: issue.comments.length })),
     commentBox,
     comments,
   );
@@ -485,7 +503,7 @@ function formatSize(bytes: number): string {
 /** The ticket's files: images previewed inline, everything can be saved. */
 function attachmentsBox(projectId: string, attachments: Attachment[]): HTMLElement {
   const box = el("div", undefined, "attachments");
-  box.append(el("h4", `Attachments (${attachments.length})`));
+  box.append(el("h4", t("Attachments ({n})", { n: attachments.length })));
   for (const a of attachments) {
     const item = el("div", undefined, "attachment");
     const status = el("p", "", "status");
@@ -494,24 +512,24 @@ function attachmentsBox(projectId: string, attachments: Attachment[]): HTMLEleme
     if (a.author) head.append(el("span", a.author, "muted"));
     const actions = el("div", undefined, "actions");
     const save = button(
-      "Save…",
+      t("Save…"),
       () =>
         void busy(save, status, async () => {
           const path = await api().saveAttachment(projectId, a.id, a.filename);
           if (path) {
-            status.textContent = `Saved to ${path}`;
+            status.textContent = t("Saved to {path}", { path });
             status.className = "status ok";
           }
         }),
     );
     actions.append(save);
-    if (a.url) actions.append(link("Open in Jira", a.url));
+    if (a.url) actions.append(link(t("Open in Jira"), a.url));
     item.append(head);
     if (isPreviewable(a)) {
       const img = el("img");
       img.alt = a.filename;
       img.className = "preview";
-      img.title = "Click to enlarge";
+      img.title = t("Click to enlarge");
       img.addEventListener("click", () => img.classList.toggle("large"));
       item.append(img);
       // Fetched by the main process with the Jira account, then shown as a data: URL.
@@ -528,20 +546,20 @@ function attachmentsBox(projectId: string, attachments: Attachment[]): HTMLEleme
 /**
  * One obvious next step for the ticket, chosen from where it is: run an epic's tickets,
  * continue the agent's work, or put a first agent on it. Everything else is folded under
- * "More options".
+ * t("More options").
  */
 function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
   const runs = runsOf(issue.key);
   const active = runs.find(isActiveRun);
   const last = runs[0];
   const status = el("p", "", "status");
-  box.replaceChildren(el("h4", "Agent"));
+  box.replaceChildren(el("h4", t("Agent")));
   if (active) {
     box.append(runSummary(active));
     const questions = questionsBox(active);
     if (questions) box.append(questions);
     const cancel = button(
-      "Stop the agent",
+      t("Stop the agent"),
       () => void busy(cancel, status, () => api().cancelRun(active.id)),
       "danger",
     );
@@ -558,7 +576,7 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
   const epic = open.length > 0 && issue.trusted;
   const continuing = !epic && Boolean(last?.agentStarted && last.branch);
   const start = button(
-    epic || continuing ? "Start over with a new agent" : `▶ Put an agent on it`,
+    epic || continuing ? t("Start over with a new agent") : `▶ ${t("Put an agent on it")}`,
     () =>
       void busy(start, status, async () => {
         await api().startRun(project.id, issue.key, {
@@ -576,13 +594,16 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
     warning.append(
       el(
         "p",
-        `Opened by ${issue.author ?? "someone"}, who is not a collaborator of this repository. Its text becomes the agent's instructions: read it before going on.`,
+        t(
+          "Opened by {author}, who is not a collaborator of this repository. Its text becomes the agent's instructions: read it before going on.",
+          { author: issue.author ?? t("someone") },
+        ),
       ),
     );
     const confirm = input("", "", "checkbox");
     confirm.checked = confirmedUntrusted.has(trustKey);
     const label = el("label", undefined, "check");
-    label.append(confirm, " I read this issue and trust what it asks");
+    label.append(confirm, ` ${t("I read this issue and trust what it asks")}`);
     confirm.addEventListener("change", () => {
       if (confirm.checked) confirmedUntrusted.add(trustKey);
       else confirmedUntrusted.delete(trustKey);
@@ -600,7 +621,13 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
       start,
       el(
         "p",
-        `Works on its own branch of ${project.repo.fullName}, ${project.agent.openPullRequest ? "then opens a pull request" : "then commits locally"}.`,
+        project.agent.openPullRequest
+          ? t("Works on its own branch of {repo}, then opens a pull request.", {
+              repo: project.repo.fullName,
+            })
+          : t("Works on its own branch of {repo}, then commits locally.", {
+              repo: project.repo.fullName,
+            }),
         "muted",
       ),
     );
@@ -612,18 +639,24 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
     if (options.open) openOptions.add(trustKey);
     else openOptions.delete(trustKey);
   });
-  options.append(el("summary", "More options"));
+  options.append(el("summary", t("More options")));
   if (!epic && issue.trusted) options.append(planBox(project.id, issue.key));
   options.append(
     branchPicker(project.id, issue, trustKey),
-    field("Model", model, "Opus only for hard tickets: it uses the Claude quota much faster."),
+    field(
+      t("Model"),
+      model,
+      t("Opus only for hard tickets: it uses the Claude quota much faster."),
+    ),
   );
   if (epic || continuing) options.append(start);
   if (issue.publicRepo)
     options.append(
       el(
         "p",
-        "Public repository: comments from people who aren't collaborators are never shown to the agent.",
+        t(
+          "Public repository: comments from people who aren't collaborators are never shown to the agent.",
+        ),
         "muted",
       ),
     );
@@ -635,7 +668,7 @@ function planBox(projectId: string, key: string): HTMLElement {
   const box = el("div", undefined, "option-row");
   const status = el("p", "", "status");
   const go = button(
-    "Break it into tickets",
+    t("Break it into tickets"),
     () =>
       void busy(go, status, async () => {
         await api().startRun(projectId, key, { planOnly: true });
@@ -645,7 +678,10 @@ function planBox(projectId: string, key: string): HTMLElement {
     go,
     el(
       "small",
-      `Too big for one agent? A ${PLAN_MODEL} agent reads the code without changing it and writes the tickets it breaks into, under ${key}.`,
+      t(
+        "Too big for one agent? A {model} agent reads the code without changing it and writes the tickets it breaks into, under {key}.",
+        { model: PLAN_MODEL, key },
+      ),
       "muted",
     ),
     status,
@@ -658,7 +694,7 @@ function epicBox(projectId: string, epicKey: string, count: number): HTMLElement
   const box = el("div", undefined, "epic-box");
   const status = el("p", "", "status");
   const go = button(
-    `▶ Put agents on its ${count} open ticket${count === 1 ? "" : "s"}`,
+    `▶ ${tn(count, "Put an agent on its open ticket", "Put agents on its {n} open tickets")}`,
     () =>
       void busy(go, status, async () => {
         await api().startEpic(projectId, epicKey);
@@ -671,7 +707,9 @@ function epicBox(projectId: string, epicKey: string, count: number): HTMLElement
     go,
     el(
       "p",
-      "One after another, each on the branch of the one before, so the work it depends on is there. A ticket that fails stops the rest.",
+      t(
+        "One after another, each on the branch of the one before, so the work it depends on is there. A ticket that fails stops the rest.",
+      ),
       "muted",
     ),
     status,
@@ -692,8 +730,8 @@ function continueBox(last: RunView): HTMLElement {
   const status = el("p", "", "status");
   const text = textarea(draft.text, 3);
   text.placeholder = last.pullRequestUrl
-    ? "e.g. Apply the review comments, then rerun the tests"
-    : "e.g. Also handle the empty list case";
+    ? t("e.g. Apply the review comments, then rerun the tests")
+    : t("e.g. Also handle the empty list case");
   text.addEventListener("input", () => {
     draft.text = text.value;
     continueDrafts.set(last.id, draft);
@@ -705,9 +743,9 @@ function continueBox(last: RunView): HTMLElement {
     continueDrafts.set(last.id, draft);
   });
   const reviewLabel = el("label", undefined, "check");
-  reviewLabel.append(review, " Pass on the pull request's review comments");
+  reviewLabel.append(review, ` ${t("Pass on the pull request's review comments")}`);
   const go = button(
-    "▶ Continue",
+    `▶ ${t("Continue")}`,
     () =>
       void busy(go, status, async () => {
         await api().continueRun(last.id, text.value, {
@@ -719,9 +757,11 @@ function continueBox(last: RunView): HTMLElement {
   );
   box.append(
     field(
-      "Continue where the agent left off",
+      t("Continue where the agent left off"),
       text,
-      `Same session and branch (${last.branch}): the agent remembers what it did.`,
+      t("Same session and branch ({branch}): the agent remembers what it did.", {
+        branch: last.branch,
+      }),
     ),
   );
   if (last.pullRequestUrl) box.append(reviewLabel);
@@ -735,11 +775,11 @@ function continueBox(last: RunView): HTMLElement {
  */
 function branchPicker(projectId: string, issue: IssueDetail, key: string): HTMLElement {
   const box = el("div", undefined, "branch-picker");
-  const choice = select([["", "Looking for this ticket's branches on origin…"]]);
+  const choice = select([["", t("Looking for this ticket's branches on origin…")]]);
   choice.disabled = true;
   const hint = el("small", "", "muted");
   const status = el("p", "", "status");
-  box.append(field("Branch", choice), hint, status);
+  box.append(field(t("Branch"), choice), hint, status);
   choice.addEventListener("change", () => chosenBranch.set(key, choice.value));
 
   let lookup = branchLookups.get(key);
@@ -757,10 +797,10 @@ function branchPicker(projectId: string, issue: IssueDetail, key: string): HTMLE
         [
           "",
           ownOnOrigin
-            ? `${branches.newBranch} (continue the earlier run)`
-            : `New: ${branches.newBranch}, from ${branches.base}`,
+            ? t("{branch} (continue the earlier run)", { branch: branches.newBranch })
+            : t("New: {branch}, from {base}", { branch: branches.newBranch, base: branches.base }),
         ],
-        ...others.map((b): [string, string] => [b, `Existing: ${b}`]),
+        ...others.map((b): [string, string] => [b, t("Existing: {branch}", { branch: b })]),
       ]).options,
     );
     const previous = chosenBranch.get(key);
@@ -772,12 +812,17 @@ function branchPicker(projectId: string, issue: IssueDetail, key: string): HTMLE
     chosenBranch.set(key, value);
     choice.disabled = false;
     hint.textContent = others.length
-      ? `${others.length === 1 ? "A branch" : `${others.length} branches`} on origin mention ${issue.key}: the work may have started there.`
-      : `No other branch on origin mentions ${issue.key}.`;
+      ? tn(
+          others.length,
+          "A branch on origin mentions {key}: the work may have started there.",
+          "{n} branches on origin mention {key}: the work may have started there.",
+          { key: issue.key },
+        )
+      : t("No other branch on origin mentions {key}.", { key: issue.key });
   }).then(() => {
     if (!choice.disabled) return;
     // Lookup failed (shown in status): a new branch still works.
-    choice.replaceChildren(...select([["", "New branch from the base"]]).options);
+    choice.replaceChildren(...select([["", t("New branch from the base")]]).options);
     choice.disabled = false;
     chosenBranch.set(key, "");
   });
@@ -795,19 +840,32 @@ function runSummary(run: RunView, options: { retry?: boolean } = {}): HTMLElemen
   if (run.costUsd !== undefined) head.append(el("span", `$${run.costUsd.toFixed(2)}`, "muted"));
   else if (run.tokens)
     head.append(
-      Object.assign(el("span", `${formatTokens(run.tokens)} tokens, ${run.turns} turns`, "muted"), {
-        title: run.budgetUsd
-          ? `The cost shows when the agent finishes; it stops at $${run.budgetUsd}.`
-          : "The cost shows when the agent finishes.",
-      }),
+      Object.assign(
+        el(
+          "span",
+          t("{tokens} tokens, {turns} turns", {
+            tokens: formatTokens(run.tokens),
+            turns: run.turns ?? 0,
+          }),
+          "muted",
+        ),
+        {
+          title: run.budgetUsd
+            ? t("The cost shows when the agent finishes; it stops at ${budget}.", {
+                budget: run.budgetUsd,
+              })
+            : t("The cost shows when the agent finishes."),
+        },
+      ),
     );
-  if (run.ci) head.append(el("span", CI_LABELS[run.ci], `pill ci ${run.ci}`));
+  if (run.ci) head.append(el("span", t(CI_LABELS[run.ci]), `pill ci ${run.ci}`));
   div.append(head);
   if (run.planOnly || run.epicKey || run.ciFixes) {
     const why = [
-      run.planOnly && "Breaking the ticket into tickets",
-      run.epicKey && `Part of a run through ${run.epicKey}`,
-      run.ciFixes && `Fixing failing checks, attempt ${run.ciFixes} of ${MAX_CI_FIXES}`,
+      run.planOnly && t("Breaking the ticket into tickets"),
+      run.epicKey && t("Part of a run through {key}", { key: run.epicKey }),
+      run.ciFixes &&
+        t("Fixing failing checks, attempt {n} of {max}", { n: run.ciFixes, max: MAX_CI_FIXES }),
     ];
     div.append(el("div", why.filter(Boolean).join(". "), "muted"));
   }
@@ -815,7 +873,7 @@ function runSummary(run: RunView, options: { retry?: boolean } = {}): HTMLElemen
     const more = el("div", undefined, "inline");
     const status = el("p", "", "status");
     const go = button(
-      `Continue with another $${run.budgetUsd}`,
+      t("Continue with another ${budget}", { budget: run.budgetUsd ?? 0 }),
       () =>
         void busy(go, status, () =>
           api().continueRun(
@@ -834,17 +892,25 @@ function runSummary(run: RunView, options: { retry?: boolean } = {}): HTMLElemen
       el(
         "span",
         run.resumeAt > Date.now()
-          ? `Picks the ticket up again at ${clock(run.resumeAt)}, when the usage limit resets.`
-          : "Picks the ticket up again in a moment.",
+          ? t("Picks the ticket up again at {time}, when the usage limit resets.", {
+              time: clock(run.resumeAt),
+            })
+          : t("Picks the ticket up again in a moment."),
         "wait",
       ),
-      button("Don't", () => void api().cancelRun(run.id)),
+      button(t("Don't"), () => void api().cancelRun(run.id)),
     );
     div.append(resume);
   }
   if (run.continuedFrom)
-    div.append(el("div", `↳ continued: ${run.instruction ?? "the review comments"}`, "muted pre"));
-  if (run.pullRequestUrl) div.append(link("Open the pull request", run.pullRequestUrl));
+    div.append(
+      el(
+        "div",
+        `↳ ${t("continued: {what}", { what: run.instruction ?? t("the review comments") })}`,
+        "muted pre",
+      ),
+    );
+  if (run.pullRequestUrl) div.append(link(t("Open the pull request"), run.pullRequestUrl));
   if (run.error) div.append(el("div", run.error, isLimitStop(run) ? "wait pre" : "bad pre"));
   if (
     options.retry !== false &&
@@ -867,18 +933,16 @@ function runSummary(run: RunView, options: { retry?: boolean } = {}): HTMLElemen
 
 /** The run's status in words; the usage limit is a pause, not a failure. */
 function statusLabel(run: RunView): string {
-  if (run.status === "failed" && isLimitStop(run)) return "Paused";
-  return (
-    {
-      queued: "Waiting",
-      preparing: "Getting ready",
-      running: "Working",
-      publishing: "Publishing",
-      done: "Done",
-      failed: "Failed",
-      cancelled: "Stopped",
-    } satisfies Record<RunView["status"], string>
-  )[run.status];
+  if (run.status === "failed" && isLimitStop(run)) return t("Paused");
+  return {
+    queued: t("Waiting"),
+    preparing: t("Getting ready"),
+    running: t("Working"),
+    publishing: t("Publishing"),
+    done: t("Done"),
+    failed: t("Failed"),
+    cancelled: t("Stopped"),
+  }[run.status];
 }
 
 const RETRY_INSTRUCTION =
@@ -898,7 +962,7 @@ function retryButton(run: RunView): HTMLElement {
   const box = el("div", undefined, "inline");
   const status = el("p", "", "status");
   const go = button(
-    run.agentStarted && run.branch ? "Pick it up again" : "Try again",
+    run.agentStarted && run.branch ? t("Pick it up again") : t("Try again"),
     () => void busy(go, status, () => retry(run)),
     "primary",
   );
@@ -917,7 +981,7 @@ function latestRun(run: RunView): RunView | undefined {
 }
 
 const clock = (at: number): string =>
-  new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  new Date(at).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
 
 /** What today brought and cost, and how many agents may work at once. */
 function usageLine(): HTMLElement {
@@ -929,22 +993,32 @@ function usageLine(): HTMLElement {
   ).size;
   const queued = work.runs.filter((r) => r.status === "queued").length;
   const line = el("div", undefined, "usage");
-  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const runs = tn(today.length, "{n} run", "{n} runs");
+  const spent = `$${cost.toFixed(2)}`;
   line.append(
     el(
       "span",
-      today.length
-        ? `Today: ${pulls ? `${plural(pulls, "pull request")}, ` : ""}$${cost.toFixed(2)} over ${plural(today.length, "run")}`
-        : "Nothing run today yet",
+      !today.length
+        ? t("Nothing run today yet")
+        : pulls
+          ? t("Today: {pulls}, {cost} over {runs}", {
+              pulls: tn(pulls, "{n} pull request", "{n} pull requests"),
+              cost: spent,
+              runs,
+            })
+          : t("Today: {cost} over {runs}", { cost: spent, runs }),
     ),
     el(
       "span",
-      `${work.workspace.maxAgents} at once${queued ? `, ${queued} waiting` : ""}`,
+      queued
+        ? t("{n} at once, {queued} waiting", { n: work.workspace.maxAgents, queued })
+        : t("{n} at once", { n: work.workspace.maxAgents }),
       "muted",
     ),
   );
-  line.title =
-    "API-equivalent cost reported by Claude Code. On a subscription it is the share of your quota.";
+  line.title = t(
+    "API-equivalent cost reported by Claude Code. On a subscription it is the share of your quota.",
+  );
   return line;
 }
 
@@ -964,7 +1038,7 @@ async function guideOffer(projectId: string): Promise<HTMLElement | undefined> {
   const card = el("div", undefined, "card guide-offer");
   const status = el("p", "", "status");
   const go = button(
-    "Have an agent write it",
+    t("Have an agent write it"),
     () =>
       void busy(go, status, async () => {
         const key = await api().prepareProject(projectId);
@@ -976,10 +1050,12 @@ async function guideOffer(projectId: string): Promise<HTMLElement | undefined> {
     "primary",
   );
   card.append(
-    el("strong", "No CLAUDE.md in this repository"),
+    el("strong", t("No CLAUDE.md in this repository")),
     el(
       "p",
-      "Every agent starts by rediscovering the code, on every ticket. A short map of the project (layout, commands, conventions) lets them start right away and spend less.",
+      t(
+        "Every agent starts by rediscovering the code, on every ticket. A short map of the project (layout, commands, conventions) lets them start right away and spend less.",
+      ),
       "muted",
     ),
     go,
@@ -991,14 +1067,14 @@ async function guideOffer(projectId: string): Promise<HTMLElement | undefined> {
 function renderCreate(): void {
   const project = activeProject()!;
   const status = el("p", "", "status");
-  const type = select([["", "Loading…"]]);
-  const summary = input("", "What needs to be done");
+  const type = select([["", t("Loading…")]]);
+  const summary = input("", t("What needs to be done"));
   const description = textarea("", 8);
   const startAgent = input("", "", "checkbox");
   const startLabel = el("label", undefined, "check");
-  startLabel.append(startAgent, " Put an agent on it right away");
+  startLabel.append(startAgent, ` ${t("Put an agent on it right away")}`);
 
-  const typeField = field("Type", type);
+  const typeField = field(t("Type"), type);
   void busy(undefined, status, async () => {
     const types = await api().issueTypes(project.id);
     // GitHub issues have no types.
@@ -1009,10 +1085,10 @@ function renderCreate(): void {
   });
 
   const create = button(
-    "Create",
+    t("Create"),
     () =>
       void busy(create, status, async () => {
-        if (!summary.value.trim()) throw new Error("A summary is required");
+        if (!summary.value.trim()) throw new Error(t("A summary is required"));
         const key = await api().createIssue(project.id, {
           issueTypeId: type.value,
           summary: summary.value,
@@ -1027,10 +1103,10 @@ function renderCreate(): void {
   );
   body().replaceChildren(
     backButton(),
-    el("h3", `New ticket in ${trackerLabel(project.tracker)}`),
+    el("h3", t("New ticket in {tracker}", { tracker: trackerLabel(project.tracker) })),
     typeField,
-    field("Summary", summary),
-    field("Description", description),
+    field(t("Summary"), summary),
+    field(t("Description"), description),
     startLabel,
     create,
     status,
@@ -1046,10 +1122,14 @@ function renderAgents(): void {
   const scroll = container.scrollTop;
   const agentsTab = board.querySelector<HTMLElement>(".tabs button:last-child");
   const needs = needsYou(work.runs, dismissed());
-  if (agentsTab) agentsTab.textContent = `Agents${needs.length ? ` (${needs.length})` : ""}`;
+  if (agentsTab) agentsTab.textContent = agentsLabel(needs.length);
   if (!work.runs.length) {
     container.replaceChildren(
-      el("p", "No agent has been put on a ticket yet. Open a ticket and press ▶.", "muted empty"),
+      el(
+        "p",
+        t("No agent has been put on a ticket yet. Open a ticket and press ▶."),
+        "muted empty",
+      ),
     );
     return;
   }
@@ -1064,26 +1144,26 @@ function renderAgents(): void {
   const all =
     limited.length > 1
       ? button(
-          `Pick the ${limited.length} up again`,
+          t("Pick the {n} up again", { n: limited.length }),
           () => {
             for (const n of limited) void retry(n.run).catch(() => undefined);
           },
           "link",
         )
       : undefined;
-  if (needs.length) sections.push(section("Needs you", needs.map(needCard), all));
-  else sections.push(el("p", "Nothing needs you right now.", "muted calm"));
-  if (working.length) sections.push(section("Working now", working.map(runCard)));
+  if (needs.length) sections.push(section(t("Needs you"), needs.map(needCard), all));
+  else sections.push(el("p", t("Nothing needs you right now."), "muted calm"));
+  if (working.length) sections.push(section(t("Working now"), working.map(runCard)));
   if (rest.length) {
     const history = button(
-      showHistory ? "Last run of each ticket only" : "Show every run",
+      showHistory ? t("Last run of each ticket only") : t("Show every run"),
       () => {
         showHistory = !showHistory;
         renderAgents();
       },
       "link",
     );
-    sections.push(section("Recent", rest.map(runCard), history));
+    sections.push(section(t("Recent"), rest.map(runCard), history));
   }
   container.replaceChildren(...sections);
   container.scrollTop = scroll;
@@ -1112,7 +1192,7 @@ function cardTitle(run: RunView): HTMLElement {
 function needCard(need: Need): HTMLElement {
   const { run } = need;
   const card = el("div", undefined, `card need ${need.kind}${isLimitStop(run) ? " limit" : ""}`);
-  card.append(cardTitle(run), el("strong", need.label, "need-label"));
+  card.append(cardTitle(run), el("strong", t(need.label, need.vars), "need-label"));
   const questions = questionsBox(run);
   if (questions) {
     card.append(questions);
@@ -1124,13 +1204,13 @@ function needCard(need: Need): HTMLElement {
   if (need.kind === "failed") actions.append(retryButton(run));
   if (need.kind === "review" && run.pullRequestUrl)
     actions.append(
-      Object.assign(link("Review the pull request", run.pullRequestUrl), {
+      Object.assign(link(t("Review the pull request"), run.pullRequestUrl), {
         className: "button primary",
       }),
     );
   if (need.kind === "checks") {
     const fix = button(
-      "Ask the agent to fix them",
+      t("Ask the agent to fix them"),
       () =>
         void busy(fix, status, () =>
           api().continueRun(
@@ -1142,7 +1222,9 @@ function needCard(need: Need): HTMLElement {
     );
     actions.append(fix);
   }
-  actions.append(button(need.kind === "review" ? "Reviewed" : "Dismiss", () => dismiss(run.id)));
+  actions.append(
+    button(need.kind === "review" ? t("Reviewed") : t("Dismiss"), () => dismiss(run.id)),
+  );
   card.append(actions, status);
   return card;
 }
@@ -1158,7 +1240,7 @@ function runCard(run: RunView): HTMLElement {
   const status = el("p", "", "status");
   if (isActiveRun(run)) {
     const cancel = button(
-      "Stop",
+      t("Stop"),
       () => void busy(cancel, status, () => api().cancelRun(run.id)),
       "danger",
     );
@@ -1166,7 +1248,7 @@ function runCard(run: RunView): HTMLElement {
   }
   const open = expandedLogs.has(run.id);
   actions.append(
-    button(open ? "Hide log" : "Log", () => {
+    button(open ? t("Hide log") : t("Log"), () => {
       if (open) expandedLogs.delete(run.id);
       else expandedLogs.add(run.id);
       renderAgents();

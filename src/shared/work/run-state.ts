@@ -2,13 +2,15 @@ import { isActiveRun, MAX_CI_FIXES, type RunView } from "./types";
 
 /**
  * What a ticket's agents are up to, said in a word, and what waits for the person. Both
- * read the ticket's latest run only: older runs are history.
+ * read the ticket's latest run only: older runs are history. Labels are English templates
+ * with their values apart, for the interface to translate.
  */
 
 export type Tone = "working" | "waiting" | "attention" | "good" | "quiet";
 
 export interface TicketState {
   label: string;
+  vars?: Record<string, string | number>;
   tone: Tone;
 }
 
@@ -19,6 +21,7 @@ export interface Need {
   kind: NeedKind;
   /** What to do about it, in a few words. */
   label: string;
+  vars?: Record<string, string | number>;
 }
 
 const ticketId = (run: RunView): string => `${run.projectId}:${run.issueKey}`;
@@ -44,7 +47,8 @@ export function ticketState(run: RunView): TicketState {
     return { label: run.planOnly ? "Planning" : "Agent working", tone: "working" };
   if (run.resumeAt)
     return {
-      label: run.resumeAt > Date.now() ? `Paused until ${clock(run.resumeAt)}` : "Resuming",
+      label: run.resumeAt > Date.now() ? "Paused until {time}" : "Resuming",
+      vars: { time: clock(run.resumeAt) },
       tone: "waiting",
     };
   if (run.status === "failed") {
@@ -69,14 +73,24 @@ export function needsYou(runs: RunView[], dismissed: ReadonlySet<string> = new S
   const needs: Need[] = [];
   for (const run of latestRuns(runs)) {
     if (run.questions?.length) {
-      needs.push({ run, kind: "question", label: `Asks to use ${run.questions[0]!.tool}` });
+      needs.push({
+        run,
+        kind: "question",
+        label: "Asks to use {tool}",
+        vars: { tool: run.questions[0]!.tool },
+      });
       continue;
     }
     if (isActiveRun(run) || run.resumeAt || dismissed.has(run.id)) continue;
     if (run.status === "failed")
       needs.push(
         run.stoppedOnBudget
-          ? { run, kind: "budget", label: `Ran out of its $${run.budgetUsd} budget` }
+          ? {
+              run,
+              kind: "budget",
+              label: "Ran out of its ${budget} budget",
+              vars: { budget: run.budgetUsd ?? 0 },
+            }
           : {
               run,
               kind: "failed",
@@ -89,8 +103,9 @@ export function needsYou(runs: RunView[], dismissed: ReadonlySet<string> = new S
         kind: "checks",
         label:
           (run.ciFixes ?? 0) >= MAX_CI_FIXES
-            ? `Checks still failing after ${MAX_CI_FIXES} fixes`
+            ? "Checks still failing after {n} fixes"
             : "Checks failed",
+        vars: { n: MAX_CI_FIXES },
       });
     else if (run.status === "done" && run.pullRequestUrl && run.ci !== "pending")
       needs.push({ run, kind: "review", label: "Pull request to review" });

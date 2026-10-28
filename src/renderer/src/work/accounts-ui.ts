@@ -1,5 +1,6 @@
 import type { AccountInput, GitHubLoginOptions, ProviderId } from "../../../shared/work/types";
 import { busy, button, el, field, input, link } from "../dom";
+import { t } from "../i18n";
 import { update, work } from "./store";
 
 /** Account forms, shared by the settings dialog and the setup guide. */
@@ -13,29 +14,30 @@ export const PROVIDER_NAMES: Record<ProviderId, string> = {
 };
 
 /** What each account is for, so nobody connects what they don't use. */
-export const PROVIDER_PURPOSE: Record<ProviderId, string> = {
-  github: "Your code on GitHub. Its issues can be your tickets: nothing else needed.",
-  bitbucket: "Only if your code is on Bitbucket. Its tickets then come from Jira.",
-  jira: "Only if your tickets live in Jira.",
-};
+const purpose = (provider: ProviderId): string =>
+  ({
+    github: t("Your code on GitHub. Its issues can be your tickets: nothing else needed."),
+    bitbucket: t("Only if your code is on Bitbucket. Its tickets then come from Jira."),
+    jira: t("Only if your tickets live in Jira."),
+  })[provider];
 
 const ATLASSIAN_TOKENS = "https://id.atlassian.com/manage-profile/security/api-tokens";
 
 /** Connect or disconnect one account; `onChange` redraws whatever holds the card. */
 export function accountCard(provider: ProviderId, onChange: () => void): HTMLElement {
   const card = el("div", undefined, "card");
-  card.append(el("h4", PROVIDER_NAMES[provider]), el("p", PROVIDER_PURPOSE[provider], "muted"));
+  card.append(el("h4", PROVIDER_NAMES[provider]), el("p", purpose(provider), "muted"));
   const status = el("p", "", "status");
   const account = work.accounts.accounts.find((a) => a.provider === provider);
 
   if (account) {
     const who = el(
       "p",
-      `Connected as ${account.user}${account.detail ? ` · ${account.detail}` : ""}`,
+      `${t("Connected as {user}", { user: account.user })}${account.detail ? ` · ${account.detail}` : ""}`,
       "ok",
     );
     const disconnect = button(
-      "Disconnect",
+      t("Disconnect"),
       () =>
         void busy(disconnect, status, async () => {
           update({ accounts: await api().disconnect(provider) });
@@ -49,7 +51,7 @@ export function accountCard(provider: ProviderId, onChange: () => void): HTMLEle
   // The form stays folded until asked for: most people need one or two of the three.
   const form = el("div", undefined, "account-form");
   form.hidden = true;
-  const open = button(`Connect ${PROVIDER_NAMES[provider]}…`, () => {
+  const open = button(t("Connect {provider}…", { provider: PROVIDER_NAMES[provider] }), () => {
     open.hidden = true;
     form.hidden = false;
     form.querySelector("input")?.focus();
@@ -63,34 +65,40 @@ export function accountCard(provider: ProviderId, onChange: () => void): HTMLEle
     form.append(field(label, fields[name], hint));
   };
   if (provider === "jira") {
-    add("site", "Site", "your-company.atlassian.net");
-    add("email", "Email", "you@company.com", "email");
-    add("token", "API token", "", "password");
-    form.append(link("Create an API token", ATLASSIAN_TOKENS));
+    add("site", t("Site"), "your-company.atlassian.net");
+    add("email", t("Email"), "you@company.com", "email");
+    add("token", t("API token"), "", "password");
+    form.append(link(t("Create an API token"), ATLASSIAN_TOKENS));
   } else if (provider === "github") {
     add(
       "token",
-      "Personal access token",
+      t("Personal access token"),
       "github_pat_…",
       "password",
-      "Fine-grained, on the repositories agents may use: Contents, Pull requests and Issues read & write.",
+      t(
+        "Fine-grained, on the repositories agents may use: Contents, Pull requests and Issues read & write.",
+      ),
     );
-    form.append(link("Create a token", "https://github.com/settings/personal-access-tokens/new"));
+    form.append(
+      link(t("Create a token"), "https://github.com/settings/personal-access-tokens/new"),
+    );
   } else {
-    add("email", "Atlassian email", "you@company.com", "email");
+    add("email", t("Atlassian email"), "you@company.com", "email");
     add(
       "token",
-      "API token with scopes",
+      t("API token with scopes"),
       "",
       "password",
-      "Bitbucket scopes: read:user, read:workspace, read:repository, write:repository, read:pullrequest, write:pullrequest.",
+      t(
+        "Bitbucket scopes: read:user, read:workspace, read:repository, write:repository, read:pullrequest, write:pullrequest.",
+      ),
     );
-    form.append(link("Create an API token", ATLASSIAN_TOKENS));
+    form.append(link(t("Create an API token"), ATLASSIAN_TOKENS));
   }
 
   const value = (name: string) => fields[name]?.value ?? "";
   const connect = button(
-    "Connect",
+    t("Connect"),
     () =>
       void busy(connect, status, async () => {
         const input: AccountInput =
@@ -104,7 +112,7 @@ export function accountCard(provider: ProviderId, onChange: () => void): HTMLEle
       }),
     "primary",
   );
-  const cancel = button("Cancel", () => {
+  const cancel = button(t("Cancel"), () => {
     form.hidden = true;
     open.hidden = false;
   });
@@ -128,17 +136,17 @@ function githubQuickLogin(onChange: () => void, tokenButton: HTMLButtonElement):
   box.append(actions, status);
 
   const signIn = button(
-    "Sign in with GitHub",
+    t("Sign in with GitHub"),
     () =>
       void busy(signIn, status, async () => {
         const code = await api().githubDeviceStart();
         const waiting = el("div", undefined, "device-code");
-        const cancel = button("Cancel", () => void api().githubDeviceCancel());
+        const cancel = button(t("Cancel"), () => void api().githubDeviceCancel());
         waiting.append(
-          el("p", "Your browser opened GitHub. Enter this code there, then approve:"),
+          el("p", t("Your browser opened GitHub. Enter this code there, then approve:")),
           el("strong", code.userCode, "code"),
           link(code.verificationUri, code.verificationUri),
-          el("p", "Waiting for GitHub…", "muted"),
+          el("p", t("Waiting for GitHub…"), "muted"),
           cancel,
         );
         actions.hidden = true;
@@ -154,7 +162,7 @@ function githubQuickLogin(onChange: () => void, tokenButton: HTMLButtonElement):
     "primary",
   );
   const cli = button(
-    "Use my GitHub CLI login",
+    t("Use my GitHub CLI login"),
     () =>
       void busy(cli, status, async () => {
         update({ accounts: await api().githubCliLogin() });
@@ -169,7 +177,7 @@ function githubQuickLogin(onChange: () => void, tokenButton: HTMLButtonElement):
     if (options.githubCli) actions.append(cli);
     if (!options.deviceFlow && !options.githubCli) return;
     box.hidden = false;
-    tokenButton.textContent = "Use a token instead…";
+    tokenButton.textContent = t("Use a token instead…");
   });
   return box;
 }

@@ -1,6 +1,7 @@
 import { MAP_H, MAP_W, TILE, ZONES } from "../../shared/engine/office-map";
 import type { AgentRecord } from "../../shared/engine/office-state";
 import { OfficeSimulation, type Activity, type Actor } from "../../shared/engine/simulation";
+import { t as tr, tn } from "./i18n";
 import { logoSvg } from "./logo";
 import { renderPanel } from "./panel";
 import { drawBackground, SCENERY, type Drawable } from "./scenery";
@@ -50,6 +51,14 @@ const background = document.createElement("canvas");
 background.width = WIDTH;
 background.height = HEIGHT;
 drawBackground(background.getContext("2d")!);
+
+/** The rooms' signs, in the interface's language (computed once: the page reloads to switch). */
+const ROOM_NAMES: Record<string, string> = {
+  research: tr("RESEARCH & DOCS"),
+  reception: tr("RECEPTION"),
+  meeting: tr("MEETING"),
+  kitchen: tr("KITCHEN"),
+};
 
 const sim = new OfficeSimulation();
 const drawn = new Set<string>();
@@ -136,9 +145,10 @@ function bubbleFor(actor: Actor, activity: Activity, t: number): Bubble | undefi
   if (actor.leaving) {
     // The session ends before the app pushes: the character says how it went.
     const run = runOf(agent);
-    if (run?.status === "publishing") return { text: "pushing…", bg: "#f4f1e8" };
-    if (run?.status === "done" && run.pullRequestUrl) return { text: "PR opened!", bg: "#9ee0ad" };
-    return { text: "bye!", bg: "#f4f1e8" };
+    if (run?.status === "publishing") return { text: tr("pushing…"), bg: "#f4f1e8" };
+    if (run?.status === "done" && run.pullRequestUrl)
+      return { text: tr("PR opened!"), bg: "#9ee0ad" };
+    return { text: tr("bye!"), bg: "#f4f1e8" };
   }
   switch (activity) {
     case "thinking":
@@ -223,8 +233,9 @@ function draw(dt: number, t: number): void {
   ctx.textBaseline = "top";
   for (const z of Object.values(ZONES)) {
     if (!z.label) continue;
+    const label = ROOM_NAMES[z.id] ?? z.label;
     const labelY = z.id === "reception" ? (z.y + z.h - 1) * TILE + 4 : (z.y - 1) * TILE + 5;
-    drawLabel(z.label, (z.x + 2) * TILE * scale, labelY * scale, "#2a1f2ecc", "#e8e6f0");
+    drawLabel(label, (z.x + 2) * TILE * scale, labelY * scale, "#2a1f2ecc", "#e8e6f0");
   }
 
   for (const actor of actors) {
@@ -278,8 +289,8 @@ function refreshChrome(): void {
   );
   const count = Object.keys(agents).length;
   agentCount.textContent = count
-    ? `${count} agent${count === 1 ? "" : "s"} in the office`
-    : "Nobody in the office";
+    ? tn(count, "{n} agent in the office", "{n} agents in the office")
+    : tr("Nobody in the office");
 }
 
 async function refreshStatus(): Promise<void> {
@@ -287,28 +298,35 @@ async function refreshStatus(): Promise<void> {
   const parts: HTMLElement[] = [];
   const status = document.createElement("span");
   status.className = info.listening ? "lamp ok" : "lamp bad";
-  status.textContent = info.listening ? "Live" : `Not live: ${info.error ?? "unknown error"}`;
+  status.textContent = info.listening
+    ? tr("Live")
+    : tr("Not live: {error}", { error: info.error ?? tr("unknown error") });
   status.title = info.listening
-    ? `The office shows Claude Code sessions as they work (they report to ${info.url})`
-    : "The office can't hear Claude Code sessions";
+    ? tr("The office shows Claude Code sessions as they work (they report to {url})", {
+        url: info.url,
+      })
+    : tr("The office can't hear Claude Code sessions");
   parts.push(status);
   if (info.demo) {
     const badge = document.createElement("span");
     badge.className = "badge";
-    badge.textContent = "Demo";
+    badge.textContent = tr("Demo");
     parts.push(badge);
   }
   if (info.transcripts) {
     const badge = document.createElement("span");
     badge.className = "badge";
-    badge.textContent = "+ your other sessions";
-    badge.title = `Your Claude Code sessions outside the app show in the office too (from ${info.transcripts})`;
+    badge.textContent = tr("+ your other sessions");
+    badge.title = tr(
+      "Your Claude Code sessions outside the app show in the office too (from {path})",
+      { path: info.transcripts },
+    );
     parts.push(badge);
   }
   if (info.configError) {
     const warn = document.createElement("span");
     warn.className = "bad";
-    warn.textContent = "office.config.json ignored (see terminal)";
+    warn.textContent = tr("office.config.json ignored (see terminal)");
     warn.title = info.configError;
     parts.push(warn);
   }
@@ -335,11 +353,26 @@ function renderMachineWarning(): void {
   const problem = env && [env.git, env.claude, env.claudeAuth].find((c) => !c.ok);
   machineWarning.hidden = !problem;
   if (!problem) return;
-  machineWarning.textContent = `Agents can't run: ${problem.detail}`;
-  machineWarning.title = "Open the setup guide";
+  machineWarning.textContent = tr("Agents can't run: {problem}", { problem: problem.detail });
+  machineWarning.title = tr("Open the setup guide");
+}
+
+/** The page's static words, written in English in index.html. */
+function translatePage(): void {
+  document.documentElement.lang = tr("en");
+  const set = (selector: string, text: string, title?: string) => {
+    const node = document.querySelector<HTMLElement>(selector)!;
+    if (text) node.textContent = text;
+    if (title) node.title = title;
+  };
+  set("#open-board", tr("Tickets"), tr("Tickets (T, or / to search)"));
+  set("#open-settings", tr("Settings"));
+  set("#waiting-agents", "", tr("What needs you (A)"));
+  set("#project-select", "", tr("Project the agents work on"));
 }
 
 function initWork(): void {
+  translatePage();
   initSettings(document.querySelector<HTMLDialogElement>("#settings")!);
   initWelcome(document.querySelector<HTMLDialogElement>("#welcome")!);
   machineWarning.addEventListener("click", () => openWelcome(0));
@@ -366,8 +399,8 @@ function initWork(): void {
     waitingAgents.hidden = needs === 0;
     waitingAgents.classList.toggle("urgent", waiting > 0);
     waitingAgents.textContent = waiting
-      ? `${waiting} agent${waiting > 1 ? "s" : ""} waiting for you`
-      : `${needs} thing${needs > 1 ? "s" : ""} for you`;
+      ? tn(waiting, "{n} agent waiting for you", "{n} agents waiting for you")
+      : tn(needs, "{n} thing for you", "{n} things for you");
     // Deleting or creating the first project changes the active one.
     if (activeProject()?.id !== shownProject) {
       shownProject = activeProject()?.id;
