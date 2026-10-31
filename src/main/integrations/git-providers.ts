@@ -1,4 +1,11 @@
-import type { CiState, GitProviderId, RepoSummary } from "../../shared/work/types";
+import {
+  PATCH_LINES,
+  type CiState,
+  type GitProviderId,
+  type PullRequestState,
+  type PullRequestView,
+  type RepoSummary,
+} from "../../shared/work/types";
 import type { FailedCheck, ReviewComment } from "../work/agent-protocol";
 import { basicAuth, HttpError, jsonClient, type Fetch } from "./http";
 import { isTrustedAuthor } from "./trackers";
@@ -18,6 +25,19 @@ export interface GitProvider {
   reviewComments(fullName: string, pullRequestUrl: string): Promise<ReviewComment[]>;
   /** The checks reported on a commit; "none" while (or when) the repository runs none. */
   checks(fullName: string, sha: string): Promise<CiReport>;
+  /** A pull request's state and changed files, given its web URL. */
+  pullRequestView(fullName: string, pullRequestUrl: string): Promise<PullRequestView>;
+  /** Merges it with a merge commit, so branches built on it stay valid. */
+  merge(fullName: string, pullRequestUrl: string): Promise<void>;
+  /** Closes it without merging. */
+  closePullRequest(fullName: string, pullRequestUrl: string): Promise<void>;
+}
+
+/** The start of a diff: enough to review, the code host has the rest. */
+export function cutPatch(patch: string | undefined): string | undefined {
+  if (!patch) return undefined;
+  const lines = patch.split("\n");
+  return lines.length > PATCH_LINES ? lines.slice(0, PATCH_LINES).join("\n") : patch;
 }
 
 export interface CiReport {
@@ -150,6 +170,39 @@ export class GitHubProvider implements GitProvider {
         created: at(c) || undefined,
         trusted: isTrustedAuthor(c.author_association),
       }));
+  }
+
+  async pullRequestView(fullName: string, pullRequestUrl: string): Promise<PullRequestView> {
+    const n = pullRequestNumber(pullRequestUrl);
+    type Pr = { state: string; merged: boolean; mergeable: boolean | null };
+    type File = { filename: string; additions: number; deletions: number; patch?: string };
+    const [pr, files] = await Promise.all([
+      this.call<Pr>("GET", `/repos/${fullName}/pulls/${n}`),
+      this.call<File[]>("GET", `/repos/${fullName}/pulls/${n}/files?per_page=100`),
+    ]);
+    const state: PullRequestState = pr.merged ? "merged" : pr.state === "open" ? "open" : "closed";
+    return {
+      url: pullRequestUrl,
+      state,
+      // null while GitHub is still working it out.
+      conflicts: state === "open" && pr.mergeable === false,
+      files: files.map((f) => ({
+        path: f.filename,
+        additions: f.additions,
+        deletions: f.deletions,
+        patch: cutPatch(f.patch),
+      })),
+    };
+  }
+
+  async merge(fullName: string, pullRequestUrl: string): Promise<void> {
+    const n = pullRequestNumber(pullRequestUrl);
+    await this.call("PUT", `/repos/${fullName}/pulls/${n}/merge`, { merge_method: "merge" });
+  }
+
+  async closePullRequest(fullName: string, pullRequestUrl: string): Promise<void> {
+    const n = pullRequestNumber(pullRequestUrl);
+    await this.call("PATCH", `/repos/${fullName}/pulls/${n}`, { state: "closed" });
   }
 
   async checks(fullName: string, sha: string): Promise<CiReport> {
@@ -392,6 +445,46 @@ export class BitbucketProvider implements GitProvider {
         created: c.created_on,
         trusted: repo.private,
       }));
+  }
+
+  /** Bitbucket's diffstat gives the files and their counts; the diff stays on Bitbucket. */
+  async pullRequestView(fullName: string, pullRequestUrl: string): Promise<PullRequestView> {
+    const base = `/repositories/${fullName}/pullrequests/${pullRequestNumber(pullRequestUrl)}`;
+    type Stat = {
+      status?: string;
+      lines_added?: number;
+      lines_removed?: number;
+      new?: { path?: string } | null;
+      old?: { path?: string } | null;
+    };
+    const [pr, stats] = await Promise.all([
+      this.call<{ state: string }>("GET", base),
+      this.pages<Stat>(`${base}/diffstat?pagelen=100`),
+    ]);
+    const state: PullRequestState =
+      pr.state === "MERGED" ? "merged" : pr.state === "OPEN" ? "open" : "closed";
+    return {
+      url: pullRequestUrl,
+      state,
+      conflicts: state === "open" && stats.some((s) => /conflict/i.test(s.status ?? "")),
+      files: stats.map((s) => ({
+        path: s.new?.path ?? s.old?.path ?? "?",
+        additions: s.lines_added ?? 0,
+        deletions: s.lines_removed ?? 0,
+      })),
+    };
+  }
+
+  async merge(fullName: string, pullRequestUrl: string): Promise<void> {
+    const id = pullRequestNumber(pullRequestUrl);
+    await this.call("POST", `/repositories/${fullName}/pullrequests/${id}/merge`, {
+      merge_strategy: "merge_commit",
+    });
+  }
+
+  async closePullRequest(fullName: string, pullRequestUrl: string): Promise<void> {
+    const id = pullRequestNumber(pullRequestUrl);
+    await this.call("POST", `/repositories/${fullName}/pullrequests/${id}/decline`);
   }
 
   /** Bitbucket gives each build's state and link, not its log. */

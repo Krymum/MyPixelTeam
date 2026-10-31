@@ -104,20 +104,27 @@ export function buildJql(projectKey: string, query: IssueQuery = {}): string {
 }
 
 /**
- * Picks the transition to apply when an agent starts ("start") or hands its work back
- * ("review"). Workflows differ per project, so this goes by status category and name.
+ * Picks the transition to apply when an agent starts ("start"), hands its work back
+ * ("review"), or its pull request is merged ("done"). Workflows differ per project, so this
+ * goes by status category and name.
  */
 export function pickTransition(
   transitions: (Transition & { toCategory?: StatusCategory })[],
-  goal: "start" | "review",
+  goal: TicketGoal,
 ): Transition | undefined {
   const matches = (t: Transition, re: RegExp) => re.test(t.to) || re.test(t.name);
   if (goal === "start") {
     const started = transitions.filter((t) => t.toCategory === "indeterminate");
     return started.find((t) => matches(t, /progress|cours|doing|develop/i)) ?? started[0];
   }
+  if (goal === "done") {
+    const done = transitions.filter((t) => t.toCategory === "done");
+    return done.find((t) => matches(t, /done|termin|fini|closed|ferm|resol|résol/i)) ?? done[0];
+  }
   return transitions.find((t) => matches(t, /review|revue|relecture/i));
 }
+
+export type TicketGoal = "start" | "review" | "done";
 
 export class JiraClient {
   readonly site: string;

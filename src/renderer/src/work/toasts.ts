@@ -14,7 +14,8 @@ const SHOW_MS = 7000;
 
 let stack: HTMLElement;
 /** What each run was at the last update, to tell what just changed. */
-const seen = new Map<string, Pick<RunView, "status" | "ci">>();
+type Seen = Pick<RunView, "status" | "ci" | "prState">;
+const seen = new Map<string, Seen>();
 let ready = false;
 
 export function initToasts(): void {
@@ -24,7 +25,7 @@ export function initToasts(): void {
   subscribe(() => {
     for (const run of work.runs) {
       const before = seen.get(run.id);
-      seen.set(run.id, { status: run.status, ci: run.ci });
+      seen.set(run.id, { status: run.status, ci: run.ci, prState: run.prState });
       if (ready && before) announce(run, before);
     }
     // The first list is the past: only changes after it are news.
@@ -32,8 +33,13 @@ export function initToasts(): void {
   });
 }
 
-function announce(run: RunView, before: Pick<RunView, "status" | "ci">): void {
+function announce(run: RunView, before: Seen): void {
   const open = () => void showIssue(run.projectId, run.issueKey);
+  if (before.prState !== "merged" && run.prState === "merged")
+    return toast("good", t("{key} merged", { key: run.issueKey }), run.issueSummary, {
+      label: t("Open"),
+      onClick: open,
+    });
   if (before.status !== "done" && run.status === "done") {
     if (run.pullRequestUrl)
       return toast(

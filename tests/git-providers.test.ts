@@ -180,3 +180,48 @@ describe("BitbucketProvider", () => {
     ).toBe("https://bb/pr/4");
   });
 });
+
+describe("pull request review", () => {
+  it("reads, merges and closes a GitHub pull request", async () => {
+    const patch = Array.from({ length: 500 }, (_, i) => `+line ${i}`).join("\n");
+    const { fetch, calls } = fakeFetch({
+      "GET /repos/acme/app/pulls/7/files": [
+        { filename: "src/a.ts", additions: 500, deletions: 2, patch },
+      ],
+      "GET /repos/acme/app/pulls/7": { state: "open", merged: false, mergeable: false },
+      "PUT /repos/acme/app/pulls/7/merge": { merged: true },
+      "PATCH /repos/acme/app/pulls/7": {},
+    });
+    const github = new GitHubProvider("tok", fetch);
+    const url = "https://github.com/acme/app/pull/7";
+    const view = await github.pullRequestView("acme/app", url);
+    expect(view).toMatchObject({ state: "open", conflicts: true });
+    expect(view.files[0]).toMatchObject({ path: "src/a.ts", additions: 500, deletions: 2 });
+    expect(view.files[0]!.patch!.split("\n")).toHaveLength(400);
+    await github.merge("acme/app", url);
+    await github.closePullRequest("acme/app", url);
+    expect(calls.slice(-2).map((c) => [c.method, c.body])).toEqual([
+      ["PUT", { merge_method: "merge" }],
+      ["PATCH", { state: "closed" }],
+    ]);
+  });
+
+  it("reads a merged Bitbucket pull request from its diffstat", async () => {
+    const { fetch } = fakeFetch({
+      "GET /2.0/repositories/acme/app/pullrequests/3/diffstat": {
+        values: [{ status: "modified", lines_added: 4, lines_removed: 1, new: { path: "a.ts" } }],
+      },
+      "GET /2.0/repositories/acme/app/pullrequests/3": { state: "MERGED" },
+    });
+    const view = await new BitbucketProvider("e", "t", "me", fetch).pullRequestView(
+      "acme/app",
+      "https://bitbucket.org/acme/app/pull-requests/3",
+    );
+    expect(view).toEqual({
+      url: "https://bitbucket.org/acme/app/pull-requests/3",
+      state: "merged",
+      conflicts: false,
+      files: [{ path: "a.ts", additions: 4, deletions: 1 }],
+    });
+  });
+});

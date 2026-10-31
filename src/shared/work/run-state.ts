@@ -57,6 +57,8 @@ export function ticketState(run: RunView): TicketState {
     return { label: "Failed", tone: "attention" };
   }
   if (run.status === "cancelled") return { label: "Stopped", tone: "quiet" };
+  if (run.prState === "merged") return { label: "Merged", tone: "good" };
+  if (run.prState === "closed") return { label: "Pull request closed", tone: "quiet" };
   if (run.ci === "failure") return { label: "Checks failed", tone: "attention" };
   if (run.ci === "pending") return { label: "Checks running", tone: "working" };
   if (run.pullRequestUrl)
@@ -64,12 +66,19 @@ export function ticketState(run: RunView): TicketState {
   return { label: run.planOnly ? "Planned" : "Done", tone: "quiet" };
 }
 
+/** Past this, a finished run is history rather than something to act on. */
+export const STALE_AFTER_MS = 3 * 24 * 3600_000;
+
 /**
  * What waits for the person, most pressing first: questions block an agent, failures and
  * red checks stop a ticket, pull requests wait for a review. `dismissed` holds run ids the
- * person already dealt with.
+ * person already dealt with; runs that ended days ago are left out.
  */
-export function needsYou(runs: RunView[], dismissed: ReadonlySet<string> = new Set()): Need[] {
+export function needsYou(
+  runs: RunView[],
+  dismissed: ReadonlySet<string> = new Set(),
+  now = Date.now(),
+): Need[] {
   const needs: Need[] = [];
   for (const run of latestRuns(runs)) {
     if (run.questions?.length) {
@@ -82,6 +91,9 @@ export function needsYou(runs: RunView[], dismissed: ReadonlySet<string> = new S
       continue;
     }
     if (isActiveRun(run) || run.resumeAt || dismissed.has(run.id)) continue;
+    if (run.endedAt && now - run.endedAt > STALE_AFTER_MS) continue;
+    // Merged or closed: nothing left to review.
+    if (run.prState === "merged" || run.prState === "closed") continue;
     if (run.status === "failed")
       needs.push(
         run.stoppedOnBudget

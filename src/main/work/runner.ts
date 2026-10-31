@@ -14,6 +14,8 @@ import {
   projectModel,
   type AgentQuestion,
   type IssueDetail,
+  type PullRequestState,
+  type PullRequestView,
   type ContinueOptions,
   type Project,
   type QuestionAnswer,
@@ -21,6 +23,7 @@ import {
   type StartRunOptions,
   type RunView,
 } from "../../shared/work/types";
+import { latestRuns, STALE_AFTER_MS } from "../../shared/work/run-state";
 import type { AccountStore } from "./accounts";
 import {
   buildContinuePrompt,
@@ -56,6 +59,7 @@ import {
 } from "./git";
 import type { CiReport } from "../integrations/git-providers";
 import type { IssueTracker } from "../integrations/trackers";
+import type { TicketGoal } from "../integrations/jira";
 import {
   createdComment,
   createTickets,
@@ -298,6 +302,72 @@ export class AgentRunner {
       { kind: "continue", instruction, includeReview: Boolean(options.includeReview) },
       extra.first,
     );
+  }
+
+  /** The run's pull request as the code host has it now; its state is kept on the runs. */
+  async pullRequest(runId: string): Promise<PullRequestView> {
+    const { run, project, url } = this.withPullRequest(runId);
+    const view = await this.options.accounts
+      .git(project.repo.provider)
+      .pullRequestView(project.repo.fullName, url);
+    this.prState(run, view.state);
+    return view;
+  }
+
+  /** Merges the run's pull request, then moves its ticket to done. */
+  async mergePullRequest(runId: string): Promise<void> {
+    const { run, project, url } = this.withPullRequest(runId);
+    await this.options.accounts.git(project.repo.provider).merge(project.repo.fullName, url);
+    this.prState(run, "merged");
+    this.log(run, "pull request merged");
+    await this.move(run, this.options.accounts.tracker(project), "done");
+  }
+
+  /** Closes the run's pull request without merging; the ticket stays as it is. */
+  async closePullRequest(runId: string): Promise<void> {
+    const { run, project, url } = this.withPullRequest(runId);
+    await this.options.accounts
+      .git(project.repo.provider)
+      .closePullRequest(project.repo.fullName, url);
+    this.prState(run, "closed");
+    this.log(run, "pull request closed");
+  }
+
+  /**
+   * Learns which pull requests waiting for a review were merged or closed on the code host,
+   * so they leave "Needs you" by themselves. Failures are left for the next round.
+   */
+  async refreshPullRequests(now = Date.now()): Promise<void> {
+    const open = latestRuns(this.list()).filter(
+      (r) =>
+        r.pullRequestUrl &&
+        (r.prState ?? "open") === "open" &&
+        !isActiveRun(r) &&
+        (!r.endedAt || now - r.endedAt < STALE_AFTER_MS),
+    );
+    for (const run of open)
+      await this.pullRequest(run.id).catch((err: unknown) =>
+        this.log(run, `could not read the pull request: ${message(err)}`),
+      );
+  }
+
+  private withPullRequest(runId: string): { run: RunView; project: Project; url: string } {
+    const run = this.runs.get(runId);
+    if (!run) throw new Error("Unknown run");
+    if (!run.pullRequestUrl) throw new Error(`${run.issueKey} has no pull request`);
+    if (isActiveRun(run)) throw new Error(`An agent is still on ${run.issueKey}`);
+    return { run, project: this.options.workspace.get(run.projectId), url: run.pullRequestUrl };
+  }
+
+  /** Every run of the ticket that shares the pull request learns its state. */
+  private prState(run: RunView, state: PullRequestState): void {
+    let changed = false;
+    for (const r of this.runs.values())
+      if (r.pullRequestUrl === run.pullRequestUrl && r.prState !== state) {
+        r.prState = state;
+        changed = true;
+      }
+    if (changed) this.changed();
   }
 
   /**
@@ -865,10 +935,10 @@ export class AgentRunner {
   }
 
   /** Moves the ticket along its workflow when the tracker has a fitting status. */
-  private async move(run: RunView, tracker: IssueTracker, goal: "start" | "review"): Promise<void> {
+  private async move(run: RunView, tracker: IssueTracker, goal: TicketGoal): Promise<void> {
     try {
       const { moved, skipped } = await tracker.advance(run.issueKey, goal);
-      this.log(run, moved ? `ticket â†’ ${moved}` : `${skipped}: ticket left as is`);
+      this.log(run, moved ? `ticket → ${moved}` : `${skipped}: ticket left as is`);
     } catch (err) {
       this.log(run, `could not move the ticket: ${message(err)}`);
     }

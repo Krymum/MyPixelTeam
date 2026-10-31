@@ -89,6 +89,11 @@ describe("pickTransition", () => {
     expect(pickTransition(transitions, "review")?.id).toBe("3");
     expect(pickTransition([transitions[3]!], "review")).toBeUndefined();
   });
+
+  it("closes a merged ticket with a done status", () => {
+    expect(pickTransition(transitions, "done")?.id).toBe("4");
+    expect(pickTransition(transitions.slice(0, 3), "done")).toBeUndefined();
+  });
 });
 
 describe("JiraClient", () => {

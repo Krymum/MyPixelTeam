@@ -365,6 +365,28 @@ export interface ContinueOptions {
   includeReview?: boolean;
 }
 
+export type PullRequestState = "open" | "merged" | "closed";
+
+export interface PullRequestFile {
+  path: string;
+  additions: number;
+  deletions: number;
+  /** The file's diff, when the code host gives it; cut after PATCH_LINES lines. */
+  patch?: string;
+}
+
+/** A pull request as the code host has it now, for reviewing it in the app. */
+export interface PullRequestView {
+  url: string;
+  state: PullRequestState;
+  /** The base moved on and git can't merge it as is. */
+  conflicts: boolean;
+  files: PullRequestFile[];
+}
+
+/** Lines of a file's diff shown in the app; the code host has the rest. */
+export const PATCH_LINES = 400;
+
 export interface RunView {
   id: string;
   projectId: string;
@@ -402,6 +424,8 @@ export interface RunView {
   budgetUsd?: number;
   /** The agent used its budget before finishing; continuing gives it another. */
   stoppedOnBudget?: boolean;
+  /** Last known state of the pull request; open when unknown. */
+  prState?: PullRequestState;
   /** The pull request's checks after this run pushed. */
   ci?: CiState;
   /** How many times agents were put back on the pull request for failing checks. */

@@ -8,6 +8,7 @@ import {
   type IssueDetail,
   type TicketBranches,
   type IssueSummary,
+  type PullRequestView,
   type RunView,
 } from "../../../shared/work/types";
 import {
@@ -614,6 +615,8 @@ function renderAgentBox(box: HTMLElement, issue: IssueDetail): void {
     box.append(warning);
   }
 
+  if (last && last.pullRequestUrl && !last.planOnly && (last.prState ?? "open") === "open")
+    box.append(reviewBox(last));
   if (epic) box.append(epicBox(project.id, issue.key, open.length));
   else if (continuing) box.append(continueBox(last!));
   else
@@ -715,6 +718,114 @@ function epicBox(projectId: string, epicKey: string, count: number): HTMLElement
     status,
   );
   return box;
+}
+
+/** Pull requests read from the code host, by run id: runs redraw the box often. */
+const pullRequests = new Map<string, Promise<PullRequestView>>();
+
+/**
+ * The agent's pull request, reviewed right here: what it changes, then merge or close it.
+ * Asking for changes is the continue box below.
+ */
+function reviewBox(run: RunView): HTMLElement {
+  const box = el("div", undefined, "review-box");
+  const status = el("p", "", "status");
+  const files = el("div", t("Reading the pull request…"), "muted");
+  const merge = button(
+    t("Merge"),
+    () => {
+      if (
+        !confirm(t("Merge the pull request of {key} into its base branch?", { key: run.issueKey }))
+      )
+        return;
+      void busy(merge, status, async () => {
+        await api().mergePullRequest(run.id);
+        pullRequests.delete(run.id);
+      });
+    },
+    "primary",
+  );
+  const close = button(t("Close without merging"), () => {
+    if (!confirm(t("Close the pull request of {key} without merging it?", { key: run.issueKey })))
+      return;
+    void busy(close, status, async () => {
+      await api().closePullRequest(run.id);
+      pullRequests.delete(run.id);
+    });
+  });
+  const actions = el("div", undefined, "actions");
+  actions.append(merge, link(t("Open on the code host"), run.pullRequestUrl!), close);
+  box.append(el("h5", t("Pull request")), files, actions, status);
+
+  let view = pullRequests.get(run.id);
+  if (!view) {
+    view = api().pullRequest(run.id);
+    pullRequests.set(run.id, view);
+    view.catch(() => pullRequests.delete(run.id));
+  }
+  void busy(undefined, status, async () => {
+    const pr = await view;
+    files.replaceChildren(...changedFiles(pr));
+    files.className = "";
+    if (pr.conflicts) {
+      merge.disabled = true;
+      merge.title = t("Conflicts with its base branch");
+    }
+  }).then(() => {
+    if (files.className === "muted") files.textContent = "";
+  });
+  return box;
+}
+
+/** The files a pull request changes, each with its diff folded. */
+function changedFiles(pr: PullRequestView): HTMLElement[] {
+  const added = pr.files.reduce((n, f) => n + f.additions, 0);
+  const removed = pr.files.reduce((n, f) => n + f.deletions, 0);
+  const head = el("p", undefined, "diff-total");
+  head.append(
+    tn(pr.files.length, "{n} file changed", "{n} files changed"),
+    " ",
+    el("span", `+${added}`, "add"),
+    " ",
+    el("span", `−${removed}`, "del"),
+  );
+  const nodes: HTMLElement[] = [head];
+  if (pr.conflicts)
+    nodes.push(
+      el(
+        "p",
+        t(
+          "It conflicts with its base branch: ask the agent to bring the base in and fix the conflicts.",
+        ),
+        "bad",
+      ),
+    );
+  for (const file of pr.files) {
+    const item = el("details", undefined, "diff-file");
+    const summary = el("summary");
+    summary.append(
+      el("span", file.path, "path"),
+      el("span", `+${file.additions}`, "add"),
+      el("span", `−${file.deletions}`, "del"),
+    );
+    item.append(summary);
+    if (file.patch) {
+      const pre = el("pre", undefined, "diff");
+      for (const line of file.patch.split("\n")) {
+        const kind = line.startsWith("@@")
+          ? "hunk"
+          : line.startsWith("+")
+            ? "add"
+            : line.startsWith("-")
+              ? "del"
+              : "";
+        pre.append(el("span", `${line}\n`, kind));
+      }
+      item.append(pre);
+    } else item.append(el("p", t("No diff to show here: open it on the code host."), "muted"));
+    nodes.push(item);
+  }
+  return nodes;
 }
 
 /** Instructions being typed for a continuation, by run id (runs redraw this box). */
@@ -858,7 +969,10 @@ function runSummary(run: RunView, options: { retry?: boolean } = {}): HTMLElemen
         },
       ),
     );
-  if (run.ci) head.append(el("span", t(CI_LABELS[run.ci]), `pill ci ${run.ci}`));
+  // Once merged or closed, the checks no longer matter.
+  if (run.prState === "merged") head.append(el("span", t("Merged"), "pill ci success"));
+  else if (run.prState === "closed") head.append(el("span", t("Pull request closed"), "pill"));
+  else if (run.ci) head.append(el("span", t(CI_LABELS[run.ci]), `pill ci ${run.ci}`));
   div.append(head);
   if (run.planOnly || run.epicKey || run.ciFixes) {
     const why = [
@@ -1141,17 +1255,22 @@ function renderAgents(): void {
   const sections: HTMLElement[] = [usageLine()];
   // The usage limit stops every agent at once: they go back together.
   const limited = needs.filter((n) => n.kind === "failed" && isLimitStop(n.run));
-  const all =
-    limited.length > 1
-      ? button(
-          t("Pick the {n} up again", { n: limited.length }),
-          () => {
-            for (const n of limited) void retry(n.run).catch(() => undefined);
-          },
-          "link",
-        )
-      : undefined;
-  if (needs.length) sections.push(section(t("Needs you"), needs.map(needCard), all));
+  const extras: HTMLElement[] = [];
+  if (limited.length > 1)
+    extras.push(
+      button(
+        t("Pick the {n} up again", { n: limited.length }),
+        () => {
+          for (const n of limited) void retry(n.run).catch(() => undefined);
+        },
+        "link",
+      ),
+    );
+  // Questions stay: an agent is blocked on them.
+  const clearable = needs.filter((n) => n.kind !== "question");
+  if (clearable.length > 1)
+    extras.push(button(t("Clear all"), () => dismiss(...clearable.map((n) => n.run.id)), "link"));
+  if (needs.length) sections.push(section(t("Needs you"), needs.map(needCard), ...extras));
   else sections.push(el("p", t("Nothing needs you right now."), "muted calm"));
   if (working.length) sections.push(section(t("Working now"), working.map(runCard)));
   if (rest.length) {
@@ -1169,11 +1288,10 @@ function renderAgents(): void {
   container.scrollTop = scroll;
 }
 
-function section(title: string, cards: HTMLElement[], extra?: HTMLElement): HTMLElement {
+function section(title: string, cards: HTMLElement[], ...extras: HTMLElement[]): HTMLElement {
   const box = el("section", undefined, "run-section");
   const head = el("div", undefined, "section-head");
-  head.append(el("h4", title));
-  if (extra) head.append(extra);
+  head.append(el("h4", title), ...extras);
   box.append(head, ...cards);
   return box;
 }
@@ -1204,9 +1322,7 @@ function needCard(need: Need): HTMLElement {
   if (need.kind === "failed") actions.append(retryButton(run));
   if (need.kind === "review" && run.pullRequestUrl)
     actions.append(
-      Object.assign(link(t("Review the pull request"), run.pullRequestUrl), {
-        className: "button primary",
-      }),
+      button(t("Review the changes"), () => void showIssue(run.projectId, run.issueKey), "primary"),
     );
   if (need.kind === "checks") {
     const fix = button(

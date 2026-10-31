@@ -1323,12 +1323,12 @@ select.compact {
 
 .section-head {
   display: flex;
-  justify-content: space-between;
+  gap: 12px;
   align-items: baseline;
 }
 
 .section-head h4 {
-  margin: 0;
+  margin: 0 auto 0 0;
 }
 
 .section-head button.link {
@@ -1461,4 +1461,86 @@ a.button.primary:hover {
   #board {
     animation: none;
   }
+}
+
+/* A pull request reviewed in the app. */
+.review-box {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 8px 0 12px;
+}
+
+.review-box h5 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.review-box .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.diff-total {
+  margin: 0 0 6px;
+}
+
+.diff-total .add,
+.diff-file .add {
+  color: var(--ok);
+}
+
+.diff-total .del,
+.diff-file .del {
+  color: var(--bad);
+}
+
+.diff-file summary {
+  display: flex;
+  gap: 8px;
+  cursor: pointer;
+  padding: 2px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.diff-file summary .path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+pre.diff {
+  margin: 4px 0 8px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.45;
+  background: var(--sunken);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+pre.diff span {
+  display: block;
+  white-space: pre;
+}
+
+pre.diff .add {
+  background: var(--tint-ok);
+}
+
+pre.diff .del {
+  background: var(--tint-bad);
+}
+
+pre.diff .hunk {
+  color: var(--muted);
 }

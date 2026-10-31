@@ -3,6 +3,7 @@ import type {
   AccountInput,
   AccountsView,
   ContinueOptions,
+  PullRequestView,
   DeviceCode,
   DiscoveredProject,
   EnvironmentCheck,
@@ -78,6 +79,9 @@ export const WORK_CALLS = [
   "prepareProject",
   "answerQuestion",
   "continueRun",
+  "pullRequest",
+  "mergePullRequest",
+  "closePullRequest",
 ] as const;
 
 export interface ServerInfo {
@@ -178,6 +182,12 @@ export interface WorkApi {
   ): Promise<void>;
   /** Resumes a finished run's session with a new instruction (and the review, if asked). */
   continueRun(runId: string, instruction: string, options?: ContinueOptions): Promise<RunView>;
+  /** The run's pull request as the code host has it now: state and changed files. */
+  pullRequest(runId: string): Promise<PullRequestView>;
+  /** Merges the run's pull request (merge commit) and moves its ticket to done. */
+  mergePullRequest(runId: string): Promise<void>;
+  /** Closes the run's pull request without merging. */
+  closePullRequest(runId: string): Promise<void>;
   onRuns(listener: (runs: RunView[]) => void): () => void;
   onOpenIssue(listener: (projectId: string, issueKey: string) => void): () => void;
 }
