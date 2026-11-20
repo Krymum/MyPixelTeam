@@ -3,6 +3,24 @@
   "version": "0.1.0",
   "description": "A pixel-art open space where your AI coding agents live and work.",
   "license": "MIT",
+  "author": "Krymum",
+  "homepage": "https://github.com/Krymum/MyPixelTeam#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Krymum/MyPixelTeam.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Krymum/MyPixelTeam/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "ai-agents",
+    "pixel-art",
+    "electron",
+    "developer-tools",
+    "jira",
+    "github"
+  ],
   "private": true,
   "main": "./out/main/index.js",
   "engines": {
